@@ -136,6 +136,26 @@ CONTROL_SCHEMA = {
     },
 }
 
+REMINDER_SCHEMA = {
+    "name": "stackchan_reminder",
+    "description": (
+        "Create, list, or stop a short reminder stored and executed locally by an awake StackChan. "
+        "This is a device-local convenience reminder while the robot remains powered, not a durable "
+        "calendar or Hermes cron job. Use Hermes cron for persistent scheduled work."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["create", "list", "stop"]},
+            "duration_seconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+            "message": {"type": "string", "description": "What StackChan should say when the reminder fires."},
+            "repeat": {"type": "boolean", "description": "Repeat at the same interval. Defaults to false."},
+            "reminder_id": {"type": "integer", "minimum": 0, "description": "Required for action=stop."},
+        },
+        "required": ["action"],
+    },
+}
+
 
 def _config() -> StackChanConfig:
     return StackChanConfig.load()
@@ -195,6 +215,17 @@ def _handle_control(args: dict[str, Any], **_kwargs: Any) -> str:
     )
 
 
+def _handle_reminder(args: dict[str, Any], **_kwargs: Any) -> str:
+    return json_result(
+        StackChanClient(_config()).reminder,
+        str(args.get("action") or ""),
+        duration_seconds=args.get("duration_seconds"),
+        message=str(args.get("message") or ""),
+        repeat=args.get("repeat", False),
+        reminder_id=args.get("reminder_id"),
+    )
+
+
 def _command_status(_raw_args: str = "") -> str:
     try:
         payload = StackChanClient(_config()).status(include_capabilities=False)
@@ -210,6 +241,7 @@ def register(ctx: Any) -> None:
         (VISION_SCHEMA, _handle_vision, "👁"),
         (READER_SCHEMA, _handle_reader, "📖"),
         (CONTROL_SCHEMA, _handle_control, "🎛"),
+        (REMINDER_SCHEMA, _handle_reminder, "⏰"),
     ):
         ctx.register_tool(
             name=schema["name"],

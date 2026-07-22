@@ -113,12 +113,21 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             self._json({"status": "ok", "device_id": "stackchan-main", "connected": bool(type(self).devices), "reader": type(self).reader})
             return
         if self.path.startswith("/v1/devices/stackchan-main/tools/"):
+            tool = self.path.rsplit("/", 1)[-1]
+            if tool == "self.robot.create_reminder":
+                result = {"content": [{"type": "text", "text": "7"}]}
+            elif tool == "self.robot.get_reminders":
+                result = {"content": [{"type": "text", "text": '[{"id":7,"message":"Stretch"}]'}]}
+            elif tool == "self.robot.stop_reminder":
+                result = {"content": [{"type": "text", "text": "true"}]}
+            else:
+                result = True
             self._json(
                 {
                     "status": "ok",
                     "device_id": "stackchan-main",
-                    "tool": self.path.rsplit("/", 1)[-1],
-                    "result": True,
+                    "tool": tool,
+                    "result": result,
                 }
             )
             return
@@ -351,6 +360,50 @@ def test_control_rejects_invalid_or_unlisted_actions_before_network(gateway, kwa
     assert _GatewayHandler.requests == before
 
 
+def test_reminder_create_list_and_stop_use_device_local_contract(gateway):
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+
+    created = client.reminder(
+        "create", duration_seconds=600, message="Stretch", repeat=False
+    )
+    listed = client.reminder("list")
+    stopped = client.reminder("stop", reminder_id=7)
+
+    assert created["result"] == 7
+    assert listed["result"] == [{"id": 7, "message": "Stretch"}]
+    assert stopped["result"] is True
+    assert created["lifecycle"] == "device_local_while_powered"
+    assert _GatewayHandler.requests[-3:] == [
+        (
+            "/v1/devices/stackchan-main/tools/self.robot.create_reminder",
+            {"arguments": {"duration_seconds": 600, "message": "Stretch", "repeat": False}},
+        ),
+        ("/v1/devices/stackchan-main/tools/self.robot.get_reminders", {"arguments": {}}),
+        ("/v1/devices/stackchan-main/tools/self.robot.stop_reminder", {"arguments": {"id": 7}}),
+    ]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"action": "create", "duration_seconds": 0},
+        {"action": "create", "duration_seconds": 60, "repeat": "yes"},
+        {"action": "create", "duration_seconds": 60, "message": "x" * 301},
+        {"action": "stop", "reminder_id": -1},
+        {"action": "delete_all"},
+    ],
+)
+def test_reminder_rejects_invalid_input_before_network(gateway, kwargs):
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+    before = list(_GatewayHandler.requests)
+
+    result = json.loads(client_module.json_result(client.reminder, **kwargs))
+
+    assert result["ok"] is False
+    assert "reminder" in result["error"] or result["error"].startswith("control_")
+    assert _GatewayHandler.requests == before
+
+
 def test_plugin_registers_status_speech_and_vision_tools():
     calls = []
 
@@ -364,10 +417,11 @@ def test_plugin_registers_status_speech_and_vision_tools():
     plugin_module.register(Context())
 
     tools = {item[1]["name"]: item[1] for item in calls if item[0] == "tool"}
-    assert set(tools) == {"stackchan_status", "stackchan_say", "stackchan_vision", "stackchan_reader", "stackchan_control"}
+    assert set(tools) == {"stackchan_status", "stackchan_say", "stackchan_vision", "stackchan_reader", "stackchan_control", "stackchan_reminder"}
     assert all(tool["toolset"] == "stackchan" for tool in tools.values())
     assert tools["stackchan_status"]["handler"] is plugin_module._handle_status
     assert tools["stackchan_say"]["handler"] is plugin_module._handle_say
     assert tools["stackchan_vision"]["handler"] is plugin_module._handle_vision
     assert tools["stackchan_reader"]["handler"] is plugin_module._handle_reader
     assert tools["stackchan_control"]["handler"] is plugin_module._handle_control
+    assert tools["stackchan_reminder"]["handler"] is plugin_module._handle_reminder

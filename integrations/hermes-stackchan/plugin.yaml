@@ -13,3 +13,4 @@ provides_tools:
   - stackchan_vision
   - stackchan_reader
   - stackchan_control
+  - stackchan_reminder

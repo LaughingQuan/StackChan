@@ -435,6 +435,36 @@ class StackChanClient:
             )
         return value
 
+    @staticmethod
+    def _mcp_value(result: Any) -> Any:
+        if not isinstance(result, dict):
+            return result
+        content = result.get("content")
+        if not isinstance(content, list):
+            return result
+        texts = [
+            str(item.get("text"))
+            for item in content
+            if isinstance(item, dict) and item.get("type") == "text" and item.get("text") is not None
+        ]
+        if not texts:
+            return result
+        joined = "\n".join(texts)
+        try:
+            return json.loads(joined)
+        except json.JSONDecodeError:
+            return joined
+
+    def _call_tool(self, device_id: str, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            self._device_path(
+                device_id, f"tools/{urllib.parse.quote(tool_name, safe='')}"
+            ),
+            body={"arguments": arguments},
+            authenticated=True,
+        )
+
     def control(
         self,
         action: str,
@@ -478,20 +508,66 @@ class StackChanClient:
                 "control_action_invalid", "StackChan control supports volume, head, or led"
             )
         device_id = self.resolve_device_id()
-        payload = self._request(
-            "POST",
-            self._device_path(
-                device_id, f"tools/{urllib.parse.quote(tool_name, safe='')}"
-            ),
-            body={"arguments": arguments},
-            authenticated=True,
-        )
+        payload = self._call_tool(device_id, tool_name, arguments)
         return {
             "ok": payload.get("status") == "ok",
             "status": payload.get("status"),
             "device": "configured_or_only_connected",
             "action": normalized,
-            "result": payload.get("result"),
+            "result": self._mcp_value(payload.get("result")),
+        }
+
+    def reminder(
+        self,
+        action: str,
+        *,
+        duration_seconds: Any = None,
+        message: str = "",
+        repeat: Any = False,
+        reminder_id: Any = None,
+    ) -> dict[str, Any]:
+        normalized = action.strip().lower()
+        if normalized == "create":
+            duration = self._integer(
+                duration_seconds,
+                name="duration_seconds",
+                minimum=1,
+                maximum=86_400,
+            )
+            reminder_message = message.strip() or "Time's up!"
+            if len(reminder_message) > 300:
+                raise StackChanError(
+                    "reminder_message_too_long", "Reminder message is limited to 300 characters"
+                )
+            if not isinstance(repeat, bool):
+                raise StackChanError("reminder_argument_invalid", "repeat must be a boolean")
+            tool_name = "self.robot.create_reminder"
+            arguments = {
+                "duration_seconds": duration,
+                "message": reminder_message,
+                "repeat": repeat,
+            }
+        elif normalized == "list":
+            tool_name = "self.robot.get_reminders"
+            arguments = {}
+        elif normalized == "stop":
+            tool_name = "self.robot.stop_reminder"
+            arguments = {
+                "id": self._integer(reminder_id, name="reminder_id", minimum=0, maximum=2_147_483_647)
+            }
+        else:
+            raise StackChanError(
+                "reminder_action_invalid", "StackChan reminder supports create, list, or stop"
+            )
+        device_id = self.resolve_device_id()
+        payload = self._call_tool(device_id, tool_name, arguments)
+        return {
+            "ok": payload.get("status") == "ok",
+            "status": payload.get("status"),
+            "device": "configured_or_only_connected",
+            "action": normalized,
+            "result": self._mcp_value(payload.get("result")),
+            "lifecycle": "device_local_while_powered",
         }
 
     def status(self, *, include_capabilities: bool = True) -> dict[str, Any]:

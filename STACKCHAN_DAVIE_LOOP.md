@@ -139,3 +139,17 @@ handoff:
 - 目标: 通过固件白名单 MCP 合同创建/list/stop 设备本地提醒。
 - 验证: reminder 映射/边界单测、Gateway 38 项回归、compileall、diff check。
 - 边界: ¥0；不把本地提醒描述成跨重启持久日历任务。
+
+### 【完成】Codex 2026-07-23 04:34 Asia/Singapore — Davie StackChan local reminders
+- 发现: 固件已有 create/list/stop reminder MCP，但它是设备通电期间的本地便利提醒，不应伪装成持久 cron。
+- 修复: 新增 `stackchan_reminder`，固定三项工具映射、结果内容解析、时长/消息/repeat/id 边界及生命周期回执。
+- 验证: 插件测试 25 passed；Gateway 回归 38 passed；compileall/diff check exit 0。
+- 花费: ¥0。
+- 边界: 未修改 Hermes cron，未将提醒描述为跨重启持久。
+- 后续: 可重复安装插件、配置本地凭据引用、验证 Hermes 工具发现。
+
+### 【进行中】Codex 2026-07-23 04:34 Asia/Singapore — install and register jm-stackchan   (TTL 30m)
+- 正在改: integrations/hermes-stackchan/**, docs/**, STACKCHAN_DAVIE_LOOP.md, /Users/jm2m/.hermes/plugins/jm-stackchan/**, /Users/jm2m/.hermes/stackchan.json, /Users/jm2m/.hermes/secrets/stackchan-admin-token, /Users/jm2m/.hermes/config.yaml（仅通过 Hermes 官方插件启用命令）
+- 目标: 以独立插件安装，不改 325 项脏 Hermes 核心；六个工具在真实 Hermes registry 可发现。
+- 验证: 安装脚本单测/干跑、插件 list/status、registry 六工具、Gateway 生产只读 smoke、源/安装 hash 一致。
+- 边界: ¥0；secret 只写 0600 文件且不输出；不直接重排 config.yaml。
