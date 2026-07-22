@@ -167,3 +167,12 @@ handoff:
 - 目标: 长驻 Davie 加载六个 StackChan 工具，Web/Telegram/Feishu 共用同一注册结果。
 - 验证: pre/post PID、health、启动日志无新 traceback、实际 agent tool schema/status smoke、Gateway/插件回归。
 - 边界: ¥0；不发送用户消息、不调用云端；不更新 integrity baseline 直到全量检查完成。
+
+
+### 【完成】Codex 2026-07-23 05:07 Asia/Singapore — production Davie StackChan activation
+- 发现: 六个工具已经注册，但最终验收必须证明真实 Davie 会话会调用工具，且不能把设备配置、网络可达或 Track/registry 状态冒充物理唤醒。首次系统 Python 测试失败是错误解释器缺 pytest；改用锁定项目 venv 后通过。one-shot 标准输出曾与会话落盘结果不同，trace 是本次工具生命周期的权威证据。
+- 修复: 补齐 CLI/Web API/Telegram/飞书 toolset，重启长驻 Gateway，增加面向用户的聊天控制说明及面向维护者的独立插件部署合同；未修改 325 项在途 Hermes 核心工作树。
+- 验证: 插件/安装器 26 passed；Gateway 38 passed；compileall、HTML 结构、diff check 通过；四个平台均显示 stackchan enabled；生产 registry 精确包含六工具；真实 Davie trace 为 tool_call -> stackchan_status -> Gateway 0.2.0 ok；say/vision/control/reminder 离线合同均返回可执行唤醒提示；reader load/status/clear 通过且清理；Hermes :8642 与 Rock5B :8793 健康；Rock5B systemd active；设备 Wi-Fi 3/3 与 USB serial 均可达；重启后日志无新 ERROR/Traceback。
+- 花费: ¥0；没有调用云端或付费模型/API。
+- 边界: 未发送 Telegram/飞书测试消息，未改 Davie executor/proactivity，未记录真实凭据；真人近距离唤醒、真实扬声器听声、摄像头现场画面、舵机/LED 动作与播放中打断仍标记 pending-human。
+- 后续: 用户在设备旁说 `Davie` 建立会话后，按用户指南完成一次六项物理验收；软件实现与生产集成已完成。
