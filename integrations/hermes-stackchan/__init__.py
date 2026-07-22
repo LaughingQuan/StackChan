@@ -75,6 +75,39 @@ VISION_SCHEMA = {
     },
 }
 
+READER_SCHEMA = {
+    "name": "stackchan_reader",
+    "description": (
+        "Prepare and control Davie's resumable StackChan reading mode. Use load with extracted plain "
+        "text, or a local UTF-8 TXT/Markdown/HTML source_path. Other document formats must go through "
+        "Davie Document Intake first. Content may be loaded while the robot is offline; play/pause/resume "
+        "need the user to wake StackChan by saying 'Davie'. Resume repeats an interrupted current sentence."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["load", "status", "play", "pause", "resume", "stop", "clear"],
+            },
+            "title": {"type": "string", "description": "Title used when action=load."},
+            "text": {
+                "type": "string",
+                "description": "Extracted reading text. Do not provide together with source_path.",
+            },
+            "source_path": {
+                "type": "string",
+                "description": "Absolute or home-relative UTF-8 TXT/Markdown/HTML path in an allowed document root.",
+            },
+            "autoplay": {
+                "type": "boolean",
+                "description": "Start immediately after load; requires an awake device. Defaults to false.",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
 
 def _config() -> StackChanConfig:
     return StackChanConfig.load()
@@ -108,6 +141,18 @@ def _handle_vision(args: dict[str, Any], **_kwargs: Any) -> str:
     )
 
 
+def _handle_reader(args: dict[str, Any], **_kwargs: Any) -> str:
+    autoplay = args.get("autoplay", False)
+    return json_result(
+        StackChanClient(_config()).reader,
+        str(args.get("action") or ""),
+        title=str(args.get("title") or ""),
+        text=str(args.get("text") or ""),
+        source_path=str(args.get("source_path") or ""),
+        autoplay=autoplay if isinstance(autoplay, bool) else False,
+    )
+
+
 def _command_status(_raw_args: str = "") -> str:
     try:
         payload = StackChanClient(_config()).status(include_capabilities=False)
@@ -121,6 +166,7 @@ def register(ctx: Any) -> None:
         (STATUS_SCHEMA, _handle_status, "🤖"),
         (SAY_SCHEMA, _handle_say, "🔊"),
         (VISION_SCHEMA, _handle_vision, "👁"),
+        (READER_SCHEMA, _handle_reader, "📖"),
     ):
         ctx.register_tool(
             name=schema["name"],

@@ -11,3 +11,4 @@ provides_tools:
   - stackchan_status
   - stackchan_say
   - stackchan_vision
+  - stackchan_reader

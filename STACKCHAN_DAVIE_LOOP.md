@@ -111,3 +111,17 @@ handoff:
 - 目标: 让 Davie 可离线预装文章/书籍并在设备唤醒后逐句播放、暂停和续读。
 - 验证: reader HTTP 合同测试、输入边界测试、Gateway 38 项回归、compileall、diff check。
 - 边界: ¥0；不解析原始二进制文件，复用 Davie Document Intake 提取后的文本；不声称真人听声通过。
+
+### 【完成】Codex 2026-07-23 04:28 Asia/Singapore — Davie StackChan resumable reader tool
+- 发现: 伴读需要支持设备离线时预装内容，且不能把二进制文件解析重复塞进机器人插件；应复用 Document Intake，只直接读取受控目录的 UTF-8 TXT/Markdown/HTML。测试还发现并修复了方法缩进和测试状态共享问题。
+- 修复: 新增 `stackchan_reader` 的 load/status/play/pause/resume/stop/clear，HTML 可读正文提取、500k 字符限制、2MB 源文件限制和可配置目录边界。
+- 验证: 插件测试 11 passed；Gateway 回归 38 passed；compileall/diff check exit 0。
+- 花费: ¥0；没有模型调用。
+- 边界: 未重复实现 PDF/DOCX 解析；未声称物理播放听感通过。
+- 后续: 实现受控音量、头部和 LED 白名单操作。
+
+### 【进行中】Codex 2026-07-23 04:28 Asia/Singapore — Davie StackChan device controls   (TTL 30m)
+- 正在改: integrations/hermes-stackchan/**, STACKCHAN_DAVIE_LOOP.md
+- 目标: 仅暴露经过固件合同验证的高层设备动作，禁止任意 MCP 名称/参数透传。
+- 验证: 映射与边界单测、未知动作拒绝、Gateway 38 项回归、compileall、diff check。
+- 边界: ¥0；不调用模型；不声称真实舵机/LED 物理变化通过。

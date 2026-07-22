@@ -30,6 +30,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
     token = "test-admin-token"
     devices = [{"device_id": "stackchan-main", "state": "listening"}]
     requests = []
+    reader = {"state": "idle", "title": "", "index": 0, "total": 0}
 
     def log_message(self, _format, *_args):
         return
@@ -55,6 +56,12 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                 return
             self._json({"devices": self.devices})
             return
+        if self.path == "/v1/devices/stackchan-main/reader":
+            if self.headers.get("Authorization") != f"Bearer {self.token}":
+                self._json({"detail": "invalid admin token"}, 401)
+                return
+            self._json({"device_id": "stackchan-main", "connected": bool(self.devices), "reader": self.reader})
+            return
         self._json({"detail": "not found"}, 404)
 
     def do_POST(self):
@@ -63,7 +70,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length) or b"{}")
-        self.requests.append((self.path, body))
+        type(self).requests.append((self.path, body))
         if self.path == "/v1/devices/stackchan-main/say":
             self._json({"status": "accepted", "device_id": "stackchan-main"})
             return
@@ -77,6 +84,30 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                 }
             )
             return
+        if self.path == "/v1/devices/stackchan-main/reader/load":
+            type(self).reader = {"state": "playing" if body.get("autoplay") else "ready", "title": body["title"], "index": 0, "total": 2}
+            self._json({"status": "accepted", "device_id": "stackchan-main", "connected": bool(type(self).devices), "reader": type(self).reader})
+            return
+        if self.path in {
+            "/v1/devices/stackchan-main/reader/play",
+            "/v1/devices/stackchan-main/reader/pause",
+            "/v1/devices/stackchan-main/reader/stop",
+        }:
+            action = self.path.rsplit("/", 1)[-1]
+            type(self).reader["state"] = {"play": "playing", "pause": "paused", "stop": "stopped"}[action]
+            self._json({"status": "ok", "device_id": "stackchan-main", "connected": bool(type(self).devices), "reader": type(self).reader})
+            return
+        self._json({"detail": "not found"}, 404)
+
+    def do_DELETE(self):
+        if self.headers.get("Authorization") != f"Bearer {self.token}":
+            self._json({"detail": "invalid admin token"}, 401)
+            return
+        type(self).requests.append((self.path, None))
+        if self.path == "/v1/devices/stackchan-main/reader":
+            type(self).reader = {"state": "idle", "title": "", "index": 0, "total": 0}
+            self._json({"status": "ok", "device_id": "stackchan-main", "connected": bool(type(self).devices), "removed": True, "reader": type(self).reader})
+            return
         self._json({"detail": "not found"}, 404)
 
 
@@ -84,6 +115,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
 def gateway(tmp_path):
     _GatewayHandler.devices = [{"device_id": "stackchan-main", "state": "listening"}]
     _GatewayHandler.requests = []
+    _GatewayHandler.reader = {"state": "idle", "title": "", "index": 0, "total": 0}
     server = ThreadingHTTPServer(("127.0.0.1", 0), _GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -97,6 +129,7 @@ def gateway(tmp_path):
                 "admin_token_file": str(token_path),
                 "default_device_id": "stackchan-main",
                 "timeout_seconds": 1,
+                "reader_allowed_roots": [str(tmp_path)],
             }
         )
     )
@@ -189,6 +222,60 @@ def test_immediate_output_fails_with_actionable_wake_instruction(gateway):
     assert not _GatewayHandler.requests
 
 
+def test_reader_can_be_preloaded_while_device_is_offline(gateway):
+    _GatewayHandler.devices = []
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+
+    result = client.reader("load", title="Short story", text="First sentence. Second sentence.")
+
+    assert result["ok"] is True
+    assert result["connected"] is False
+    assert result["reader"]["state"] == "ready"
+    assert _GatewayHandler.requests[-1] == (
+        "/v1/devices/stackchan-main/reader/load",
+        {"title": "Short story", "text": "First sentence. Second sentence.", "autoplay": False},
+    )
+
+
+def test_reader_play_pause_resume_stop_and_clear(gateway):
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+    client.reader("load", title="Story", text="One. Two.")
+
+    assert client.reader("play")["reader"]["state"] == "playing"
+    assert client.reader("pause")["reader"]["state"] == "paused"
+    assert client.reader("resume")["reader"]["state"] == "playing"
+    assert client.reader("stop")["reader"]["state"] == "stopped"
+    assert client.reader("status")["reader"]["title"] == "Story"
+    cleared = client.reader("clear")
+    assert cleared["removed"] is True
+    assert cleared["reader"]["state"] == "idle"
+
+
+def test_reader_extracts_readable_html_without_script(gateway):
+    source = gateway.parent / "lesson.html"
+    source.write_text("<html><style>hidden</style><h1>Hello</h1><p>Read this sentence.</p><script>bad()</script></html>")
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+
+    client.reader("load", source_path=str(source))
+
+    request = _GatewayHandler.requests[-1][1]
+    assert request["title"] == "lesson"
+    assert "Hello" in request["text"]
+    assert "Read this sentence." in request["text"]
+    assert "hidden" not in request["text"]
+    assert "bad()" not in request["text"]
+
+
+def test_reader_rejects_source_outside_configured_roots(gateway, tmp_path):
+    outside = tmp_path.parent / "outside-reader.txt"
+    outside.write_text("Do not load me")
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+
+    result = json.loads(client_module.json_result(client.reader, "load", source_path=str(outside)))
+
+    assert result["error"] == "reader_source_not_allowed"
+
+
 def test_plugin_registers_status_speech_and_vision_tools():
     calls = []
 
@@ -202,8 +289,9 @@ def test_plugin_registers_status_speech_and_vision_tools():
     plugin_module.register(Context())
 
     tools = {item[1]["name"]: item[1] for item in calls if item[0] == "tool"}
-    assert set(tools) == {"stackchan_status", "stackchan_say", "stackchan_vision"}
+    assert set(tools) == {"stackchan_status", "stackchan_say", "stackchan_vision", "stackchan_reader"}
     assert all(tool["toolset"] == "stackchan" for tool in tools.values())
     assert tools["stackchan_status"]["handler"] is plugin_module._handle_status
     assert tools["stackchan_say"]["handler"] is plugin_module._handle_say
     assert tools["stackchan_vision"]["handler"] is plugin_module._handle_vision
+    assert tools["stackchan_reader"]["handler"] is plugin_module._handle_reader

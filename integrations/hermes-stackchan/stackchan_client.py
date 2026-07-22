@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,7 @@ class StackChanConfig:
     admin_token_file: Path
     default_device_id: str
     timeout_seconds: float
+    reader_allowed_roots: tuple[Path, ...]
 
     @classmethod
     def load(cls, path: Path | None = None) -> "StackChanConfig":
@@ -76,12 +78,20 @@ class StackChanConfig:
             raise StackChanError(
                 "configuration_invalid", "StackChan timeout_seconds must be numeric"
             ) from exc
+        roots = raw.get("reader_allowed_roots")
+        if roots is None:
+            roots = [Path.home() / "Documents", Path.home() / "Downloads", Path.home() / "NAS"]
+        if not isinstance(roots, list) or not all(isinstance(item, str | Path) for item in roots):
+            raise StackChanError(
+                "configuration_invalid", "reader_allowed_roots must be a list of paths"
+            )
         return cls(
             enabled=bool(raw.get("enabled", True)),
             base_url=base_url,
             admin_token_file=token_file,
             default_device_id=device_id,
             timeout_seconds=timeout,
+            reader_allowed_roots=tuple(Path(item).expanduser().resolve() for item in roots),
         )
 
     def read_admin_token(self) -> str:
@@ -248,6 +258,24 @@ class StackChanClient:
             next_step="Say 'Davie' near StackChan to wake it, then retry the action.",
         )
 
+    def target_device_id(self, *, require_connected: bool) -> str:
+        if require_connected:
+            return self.resolve_device_id()
+        if self.config.default_device_id:
+            return self.config.default_device_id
+        connected_ids = [
+            str(item.get("device_id") or "").strip()
+            for item in self.devices()
+            if DEVICE_ID_PATTERN.fullmatch(str(item.get("device_id") or "").strip())
+        ]
+        if len(connected_ids) == 1:
+            return connected_ids[0]
+        raise StackChanError(
+            "default_device_required",
+            "A default StackChan must be configured before content can be prepared while offline",
+            next_step="Configure the primary StackChan device identity, then retry.",
+        )
+
     def _device_path(self, device_id: str, suffix: str) -> str:
         return f"/v1/devices/{urllib.parse.quote(device_id, safe='')}/{suffix.lstrip('/')}"
 
@@ -296,6 +324,106 @@ class StackChanClient:
             "spoken": bool(payload.get("spoken")),
         }
 
+    def _reader_source_text(self, source_path: str) -> str:
+        candidate = Path(source_path).expanduser().resolve()
+        if not candidate.is_file():
+            raise StackChanError("reader_source_missing", "Reader source file does not exist")
+        if not any(candidate.is_relative_to(root) for root in self.config.reader_allowed_roots):
+            raise StackChanError(
+                "reader_source_not_allowed",
+                "Reader source is outside the configured document roots",
+            )
+        if candidate.stat().st_size > 2_000_000:
+            raise StackChanError(
+                "reader_source_too_large",
+                "Reader source is over 2 MB; use Davie Document Intake to extract a smaller section",
+            )
+        if candidate.suffix.lower() not in {".txt", ".md", ".html", ".htm"}:
+            raise StackChanError(
+                "reader_source_format_unsupported",
+                "Direct reader sources must be TXT, Markdown, or HTML; extract other files with Document Intake first",
+            )
+        try:
+            raw = candidate.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise StackChanError(
+                "reader_source_unreadable", "Reader source could not be decoded as UTF-8"
+            ) from exc
+        if candidate.suffix.lower() in {".html", ".htm"}:
+            parser = _ReadableHTMLText()
+            parser.feed(raw)
+            raw = parser.text()
+        return raw
+
+    def reader(
+        self,
+        action: str,
+        *,
+        title: str = "",
+        text: str = "",
+        source_path: str = "",
+        autoplay: bool = False,
+    ) -> dict[str, Any]:
+        normalized = action.strip().lower()
+        if normalized == "resume":
+            normalized = "play"
+        if normalized not in {"load", "status", "play", "pause", "stop", "clear"}:
+            raise StackChanError("reader_action_invalid", "Unsupported StackChan reader action")
+
+        require_connected = normalized in {"play", "pause"} or (
+            normalized == "load" and bool(autoplay)
+        )
+        device_id = self.target_device_id(require_connected=require_connected)
+        if normalized == "load":
+            content = text.strip()
+            if source_path.strip():
+                if content:
+                    raise StackChanError(
+                        "reader_source_ambiguous", "Provide either text or source_path, not both"
+                    )
+                content = self._reader_source_text(source_path.strip()).strip()
+            if not content:
+                raise StackChanError("reader_text_required", "Reader content is required")
+            if len(content) > 500_000:
+                raise StackChanError(
+                    "reader_text_too_large", "Reader content is limited to 500,000 characters"
+                )
+            reader_title = title.strip() or (
+                Path(source_path).stem if source_path.strip() else "Davie reading"
+            )
+            if len(reader_title) > 300:
+                raise StackChanError(
+                    "reader_title_too_long", "Reader title is limited to 300 characters"
+                )
+            payload = self._request(
+                "POST",
+                self._device_path(device_id, "reader/load"),
+                body={"title": reader_title, "text": content, "autoplay": bool(autoplay)},
+                authenticated=True,
+            )
+        elif normalized == "status":
+            payload = self._request(
+                "GET", self._device_path(device_id, "reader"), authenticated=True
+            )
+        elif normalized == "clear":
+            payload = self._request(
+                "DELETE", self._device_path(device_id, "reader"), authenticated=True
+            )
+        else:
+            payload = self._request(
+                "POST",
+                self._device_path(device_id, f"reader/{normalized}"),
+                authenticated=True,
+            )
+        return {
+            "ok": payload.get("status") in {None, "ok", "accepted"},
+            "status": payload.get("status") or "ok",
+            "device": "configured_or_only_connected",
+            "connected": bool(payload.get("connected")),
+            "reader": payload.get("reader") if isinstance(payload.get("reader"), dict) else {},
+            **({"removed": bool(payload.get("removed"))} if normalized == "clear" else {}),
+        }
+
     def status(self, *, include_capabilities: bool = True) -> dict[str, Any]:
         health = self.health()
         result: dict[str, Any] = {
@@ -334,6 +462,37 @@ class StackChanClient:
             ] if isinstance(capabilities, list) else []
         return result
 
+
+class _ReadableHTMLText(HTMLParser):
+    _BLOCKED = {"script", "style", "noscript", "svg"}
+    _BREAKS = {"p", "div", "article", "section", "li", "br", "h1", "h2", "h3", "h4", "h5", "h6"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._blocked_depth = 0
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, _attrs: list[tuple[str, str | None]]) -> None:
+        lowered = tag.lower()
+        if lowered in self._BLOCKED:
+            self._blocked_depth += 1
+        elif lowered in self._BREAKS and self._parts:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        lowered = tag.lower()
+        if lowered in self._BLOCKED and self._blocked_depth:
+            self._blocked_depth -= 1
+        elif lowered in self._BREAKS and self._parts:
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._blocked_depth and data.strip():
+            self._parts.append(data.strip())
+
+    def text(self) -> str:
+        lines = [" ".join(line.split()) for line in " ".join(self._parts).splitlines()]
+        return "\n".join(line for line in lines if line)
 
 def json_result(callable_, *args, **kwargs) -> str:
     try:
