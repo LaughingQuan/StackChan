@@ -1,2 +1,22 @@
 .DS_Store
 .idea/
+
+# Python gateway build/test state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# ESP-IDF generated and machine-local state
+firmware/build*/
+firmware/components/
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/sdkconfig.defaults.local
+firmware/xiaozhi-esp32/
+
+# Local runtime configuration and credentials
+*.runtime.env
+*.secret
+*.md.lock

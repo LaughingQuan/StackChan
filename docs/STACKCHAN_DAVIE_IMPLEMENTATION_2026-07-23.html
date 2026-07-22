@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stack-chan Davie 本地接入实施与验收</title>
+  <style>
+    :root { --ink:#17352f; --muted:#66756f; --paper:#f5efe2; --panel:#fffaf0; --line:#d6cbb6; --accent:#e45b3c; --ok:#1e6653; --watch:#9a641f; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--ink); background:linear-gradient(rgba(23,53,47,.035) 1px,transparent 1px),var(--paper); background-size:100% 32px; font-family:"Avenir Next","PingFang SC",sans-serif; line-height:1.65; }
+    main { width:min(1080px,calc(100% - 32px)); margin:auto; padding:56px 0 96px; }
+    header { padding-bottom:26px; border-bottom:2px solid var(--ink); }
+    .eyebrow { color:var(--accent); font-weight:800; letter-spacing:.15em; text-transform:uppercase; }
+    h1,h2 { font-family:Georgia,"Songti SC",serif; }
+    h1 { margin:8px 0 12px; font-size:clamp(38px,7vw,70px); line-height:1.03; }
+    h2 { margin:38px 0 14px; font-size:30px; }
+    h3 { margin:0 0 8px; }
+    p { margin:0 0 12px; }
+    code { padding:2px 6px; border-radius:5px; background:#e9dfcc; overflow-wrap:anywhere; }
+    .lead { max-width:850px; color:var(--muted); font-size:18px; }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; }
+    .card { padding:20px; border:1px solid var(--line); background:rgba(255,250,240,.9); box-shadow:0 12px 30px rgba(23,53,47,.06); }
+    .ok,.watch { display:inline-block; padding:4px 9px; color:white; font-size:12px; font-weight:800; letter-spacing:.06em; }
+    .ok { background:var(--ok); } .watch { background:var(--watch); }
+    table { width:100%; border-collapse:collapse; background:rgba(255,250,240,.9); }
+    th,td { padding:12px 13px; border:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { background:#e7decd; }
+    pre { overflow:auto; padding:16px; border:1px solid var(--line); background:#1d302d; color:#f8f1e4; }
+    ul,ol { padding-left:24px; } li { margin:7px 0; }
+    .note { margin:18px 0; padding:15px 18px; border-left:5px solid var(--accent); background:var(--panel); }
+    @media(max-width:720px){ .grid{grid-template-columns:1fr} main{padding-top:34px} }
+  </style>
+</head>
+<body><main>
+  <header>
+    <div class="eyebrow">Implementation report · 2026-07-23</div>
+    <h1>Official Stack-chan.<br>Local Davie.</h1>
+    <p class="lead">以官方 1.4.3 开源固件为主体，通过独立 Gateway 接入本地 ASR、Davie、TTS 和视觉能力。本文记录已实现内容、真实证据、恢复路径及尚未伪造通过的物理验收项。</p>
+  </header>
+
+  <h2>最终架构</h2>
+  <div class="grid">
+    <article class="card"><h3>Stack-chan 设备</h3><p>保留官方屏幕、表情、舵机、触摸、摄像头、双麦克风、扬声器、配网、OTA、Xiaozhi WebSocket/Opus 与 MCP。</p></article>
+    <article class="card"><h3>Local Gateway</h3><p>负责协议转换、端点判断、generation-safe 打断、相机会话绑定、认证和运行状态，不承载模型权重。</p></article>
+    <article class="card"><h3>NVIDIA Media</h3><p>Fun-ASR 处理语音输入，CosyVoice3 处理语音输出。Gateway 只传输标准 WAV/PCM/Opus 数据。</p></article>
+    <article class="card"><h3>Davie</h3><p>继续负责人格、记忆、知识库、工具、任务编排和多模态理解；设备通过稳定 session key 与 session id 延续上下文。</p></article>
+  </div>
+
+  <h2>实施内容</h2>
+  <table>
+    <thead><tr><th>模块</th><th>完成内容</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>官方固件</td><td>官方 1.4.3 全量构建；Davie 构建开关仅改变入口标签；官方功能默认不分叉。</td><td><span class="ok">PASSED</span></td></tr>
+      <tr><td>唤醒</td><td>官方 MultiNet5 English Q8，命令与显示文本为 Davie，阈值 10%；未继续盲目降低阈值。</td><td><span class="watch">PHYSICAL CHECK</span></td></tr>
+      <tr><td>音频</td><td>设备 AEC、双通道输入、Opus 双向流、Fun-ASR、CosyVoice3、播放中 generation 取消。</td><td><span class="ok">SERVICE E2E</span></td></tr>
+      <tr><td>视觉</td><td>官方相机 MCP multipart 合同、JPEG 限制、Davie 多模态分析、活动语音会话连续性。</td><td><span class="ok">PASSED</span></td></tr>
+      <tr><td>设备工具</td><td>发现并转发官方相机、头部、LED、提醒、音量、亮度、主题和状态工具。</td><td><span class="ok">CONTRACT PASSED</span></td></tr>
+      <tr><td>安全隔离</td><td>设备、Davie 和管理员凭据分别由 systemd credential 文件注入；Git 中无真实凭据。</td><td><span class="ok">PASSED</span></td></tr>
+      <tr><td>TF 卡</td><td>核心路径不依赖 TF 卡；预留后续书籍缓存、离线进度和恢复素材。</td><td><span class="ok">OPTIONAL</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2>实测证据</h2>
+  <ul>
+    <li>ESP-IDF 5.5.4 全量固件构建通过，应用分区仍有 27% 空间。</li>
+    <li>生成 assets 为约 4.15 MB（3.96 MiB），低于 4 MiB 分区上限，保留约 38 KiB 余量。</li>
+    <li>实体设备启动确认 16 MiB Flash、8 MiB PSRAM、GC0308 相机、触摸、RTC、IMU、舵机、双向音频、官方 MCP 和本地网络均正常。</li>
+    <li>Gateway 自动化测试 24 项通过；Python 编译、wheel/sdist 构建通过。</li>
+    <li>本地语音 E2E 收到 hello、stt、llm、tts 全生命周期及有效输出音频。</li>
+    <li>视觉 E2E 使用真实 JPEG，Davie 返回与画面一致的具体描述。</li>
+    <li>生产服务已启用并处于 active，健康接口正常，未修改无关 Davie 服务。</li>
+  </ul>
+
+  <div class="note"><strong>诚实边界：</strong>自动化播放的远距离合成 “Davie” 未形成可靠声学触发证据，因此真人近距离唤醒、真实环境回声与播放中打断仍需由人在设备旁最终验收。模型载入日志不能替代这项物理证据。</div>
+
+  <h2>构建与部署</h2>
+  <h3>固件</h3>
+  <pre>cp firmware/sdkconfig.defaults.davie.example firmware/sdkconfig.defaults.local
+# Edit only local endpoint values. Provision Wi-Fi through the device UI.
+source /path/to/esp-idf-v5.5.4/export.sh
+cd firmware
+python3 fetch_repos.py
+idf.py build
+idf.py -p &lt;SERIAL_PORT&gt; flash</pre>
+
+  <h3>Gateway</h3>
+  <pre>cd integrations/davie-gateway
+uv sync --dev
+uv run pytest -q
+uv build
+# Install the wheel on a Linux host and use deploy/stackchan-davie-gateway.service.</pre>
+
+  <h2>恢复路径</h2>
+  <p>NAS 已保存原厂 1.4.4 完整 16 MiB 镜像以及接入前完整镜像和 NVS 单独备份。恢复前先核验对应目录中的 SHA256SUMS，然后执行：</p>
+  <pre>python -m esptool --chip esp32s3 -p &lt;SERIAL_PORT&gt; \
+  write_flash 0x0 /path/to/stackchan-full-16mb.bin</pre>
+  <p>完整镜像会覆盖 NVS。若只需恢复 Wi-Fi/设备设置，应使用已保存的 NVS 分区镜像，并在写入前再次确认偏移和长度。</p>
+
+  <h2>最终真人验收</h2>
+  <ol>
+    <li>在设备 0.5 至 1 米内自然说 “Davie”，确认进入 listening。</li>
+    <li>说一句普通问题，确认 Davie 的文字和语音均正确返回。</li>
+    <li>老师声音播放时直接讲话，确认旧音频立即停止且新问题被识别。</li>
+    <li>说 “Look at this and explain it”，确认相机内容正确；再追问颜色或物体，确认上下文连续。</li>
+    <li>从官方 Launcher 打开 DAVIE，确认入口和原有设置、舞蹈、遥控等官方功能并存。</li>
+  </ol>
+</main></body>
+</html>

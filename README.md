@@ -1,5 +1,32 @@
 # StackChan Open-Source
 
+## Davie local runtime fork
+
+This fork keeps the official StackChan 1.4.3 firmware as the hardware and UI
+baseline, then adds a small, removable integration for a local Davie runtime.
+The device still uses the upstream launcher, AI Agent, Xiaozhi WebSocket/Opus
+protocol, MCP camera and robot tools, Wi-Fi provisioning, OTA, motion, display,
+and audio stack.
+
+The local integration is split by responsibility:
+
+- `firmware/` contains the upstream device firmware plus build-time switches
+  for the `Davie` wake command, device AEC, the `DAVIE` launcher label, and an
+  assets-size-compatible official English speech model.
+- `integrations/davie-gateway/` is a portable Linux service that translates
+  the official Xiaozhi protocol to local ASR, Davie, TTS, and vision services.
+- `docs/DAVIE_LOCAL_RUNTIME_ARCHITECTURE.html` records the upgrade-safe design.
+- `docs/STACKCHAN_DAVIE_IMPLEMENTATION_2026-07-23.html` records the verified
+  implementation and the remaining physical acceptance boundary.
+
+Wi-Fi credentials and runtime tokens are intentionally absent from Git. Copy
+`firmware/sdkconfig.defaults.davie.example` to
+`firmware/sdkconfig.defaults.local`, set only local endpoints there, and use
+the official device provisioning flow for Wi-Fi.
+
+The TF card is optional. The current voice, camera, motion, display, OTA, and
+Davie paths do not depend on removable storage.
+
 <img src="https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1205/K151_stack_chan_main_pictures_01.webp" width="60%">
 
 Here are StackChan related open-source resources, including source code of the StackChan firmware, remote controller firmware, mobile app (iOS and Android), and server. 

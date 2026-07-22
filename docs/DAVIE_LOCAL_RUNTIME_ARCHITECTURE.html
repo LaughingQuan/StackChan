@@ -87,11 +87,25 @@
       <li>原样构建官方 1.4.3，并验证屏幕、舵机、摄像头、双麦克风、扬声器、BLE 和官方状态机。</li>
       <li>在 Rock5B 实现兼容官方 WebSocket 协议的 Davie Gateway，先做到固件零改动接入。</li>
       <li>验证双向 Opus、设备 AEC、播放中 abort、STT/LLM/TTS 状态和 MCP 工具发现。</li>
-      <li>为唤醒词 “Davie” 增加独立策略：先服务端验证，后续再导入经实机验收的本地 WakeNet 模型。</li>
-      <li>增加任务型菜单：Talk to Davie、Read with me、Look and explain、Capture note、Today、Device status。</li>
+      <li>以官方 MultiNet5 English Q8 实现本地 “Davie” 命令识别，并保留真人近场声学验收门槛。</li>
+      <li>复用官方 AI Agent 入口，在 Davie 构建中仅将标签改为 DAVIE；阅读、拍照解释、提醒、状态和运动能力通过语音与官方 MCP 工具提供，不复制菜单。</li>
       <li>接入 16GB TF 可选缓存；无卡时所有核心功能仍通过网络工作。</li>
       <li>完成断网、重连、长时间播放、打断、双讲、摄像头和恢复镜像验收后再发布。</li>
     </ol>
+  </section>
+
+  <section>
+    <h2>当前实现状态</h2>
+    <table>
+      <thead><tr><th>能力</th><th>状态</th><th>证据边界</th></tr></thead>
+      <tbody>
+        <tr><td>官方固件与硬件</td><td>已构建并刷写</td><td>相机、触摸、屏幕、舵机、RTC、双向音频与 MCP 初始化日志通过</td></tr>
+        <tr><td>本地语音链路</td><td>已通过服务级 E2E</td><td>Opus 输入、Fun-ASR、Davie、CosyVoice3、Opus 输出完整闭环</td></tr>
+        <tr><td>视觉链路</td><td>已通过</td><td>官方 multipart 合同、Davie 多模态分析及同会话连续性测试通过</td></tr>
+        <tr><td>唤醒与物理打断</td><td>待真人最终验收</td><td>模型载入与配置已证明，但远距离合成音频不作为真人声学通过证据</td></tr>
+        <tr><td>TF 卡</td><td>可选</td><td>当前核心功能不依赖 TF 卡；后续仅用于书籍缓存和离线进度</td></tr>
+      </tbody>
+    </table>
   </section>
 
   <section>

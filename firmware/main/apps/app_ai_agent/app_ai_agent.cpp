@@ -18,7 +18,11 @@ using namespace smooth_ui_toolkit::lvgl_cpp;
 AppAiAgent::AppAiAgent()
 {
     // Configure App name
+#ifdef CONFIG_STACKCHAN_DAVIE_LOCAL_RUNTIME
+    setAppInfo().name = "DAVIE";
+#else
     setAppInfo().name = "AI.AGENT";
+#endif
     // Configure App icon
     static auto icon  = assets::get_image("icon_ai_agent.bin");
     setAppInfo().icon = (void*)&icon;

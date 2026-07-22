@@ -117,7 +117,14 @@ if(CONFIG_BOARD_TYPE_M5STACK_STACK_CHAN)
     set(BOARD_TYPE "m5stack-stack-chan")
     set(BUILTIN_TEXT_FONT font_puhui_basic_20_4)
     set(BUILTIN_ICON_FONT font_awesome_20_4)
-    set(DEFAULT_EMOJI_COLLECTION twemoji_64)
+    # The local English wake model shares the 4 MiB assets partition. Keep the
+    # official 64 px collection for stock builds, but use the smaller official
+    # collection for Davie builds so OTA assets retain safe headroom.
+    if(CONFIG_STACKCHAN_DAVIE_LOCAL_RUNTIME)
+        set(DEFAULT_EMOJI_COLLECTION twemoji_32)
+    else()
+        set(DEFAULT_EMOJI_COLLECTION twemoji_64)
+    endif()
 endif()
 
 if(MANUFACTURER)
