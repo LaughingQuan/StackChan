@@ -31,6 +31,13 @@ device tokens, and the Hermes API key must never be placed in Git.
   volume, brightness, theme, device status, and other upstream tools.
 - Camera JPEG analysis through Davie's multimodal API, bound back to the active
   spoken session so follow-up questions retain visual context.
+- A voice-first capability router for help, reminders, volume, head movement,
+  onboard LED control, and reading commands. Direct device actions do not spend
+  a model call and only report success after the matching MCP tool succeeds.
+- Persistent read-aloud state with sentence-level checkpoints. Barge-in pauses
+  immediately; resume repeats the interrupted sentence instead of skipping it.
+- High-level authenticated APIs for Davie to speak, see, control hardware, and
+  load/play/pause/stop reading without knowing device-specific MCP details.
 - Separate device and administrator authentication.
 
 ## Requirements
@@ -99,9 +106,25 @@ Administrator routes require the distinct admin token:
 
 ```text
 GET  /v1/devices
+GET  /v1/capabilities
+GET  /v1/devices/{device_id}/capabilities
 POST /v1/devices/{device_id}/say
+POST /v1/devices/{device_id}/vision
+POST /v1/devices/{device_id}/reader/load
+GET  /v1/devices/{device_id}/reader
+POST /v1/devices/{device_id}/reader/play
+POST /v1/devices/{device_id}/reader/pause
+POST /v1/devices/{device_id}/reader/stop
+DELETE /v1/devices/{device_id}/reader
 POST /v1/devices/{device_id}/tools/{tool_name}
 ```
+
+`/v1/capabilities` is public metadata and never contains credentials. All
+device-specific routes require the administrator token. A book can be loaded
+while the device is offline; autoplay requires an active audio session.
+The official 1.4.3 firmware opens that session on wake, so immediate remote
+speech, vision, and hardware actions require the device to be awake and
+connected. Offline reader loading and persisted checkpoints do not.
 
 The camera endpoint follows the official StackChan multipart contract:
 

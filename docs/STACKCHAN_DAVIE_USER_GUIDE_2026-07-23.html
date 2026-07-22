@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stack-chan Davie 使用指南</title>
+  <style>
+    :root{--ink:#183932;--muted:#687770;--paper:#f5eedf;--panel:#fffaf0;--line:#d5c8b0;--accent:#e4573d;--green:#1d6652}
+    *{box-sizing:border-box}body{margin:0;color:var(--ink);background:linear-gradient(rgba(24,57,50,.04) 1px,transparent 1px),var(--paper);background-size:100% 30px;font-family:"Avenir Next","PingFang SC",sans-serif;line-height:1.65}
+    main{width:min(1040px,calc(100% - 28px));margin:auto;padding:48px 0 90px}header{border-bottom:2px solid var(--ink);padding-bottom:24px}.eyebrow{color:var(--accent);font-weight:800;letter-spacing:.14em}h1,h2{font-family:Georgia,"Songti SC",serif}h1{font-size:clamp(38px,8vw,68px);line-height:1;margin:9px 0 13px}h2{font-size:29px;margin:38px 0 13px}.lead{color:var(--muted);font-size:18px;max-width:780px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.card{background:rgba(255,250,240,.92);border:1px solid var(--line);padding:19px;box-shadow:0 12px 28px rgba(24,57,50,.06)}.card strong{display:block;color:var(--accent);margin-bottom:5px}table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{border:1px solid var(--line);padding:12px;text-align:left;vertical-align:top}th{background:#e8ddca}.voice{font-weight:700;color:var(--green)}.note{padding:15px 18px;border-left:5px solid var(--accent);background:var(--panel)}code{background:#e9deca;border-radius:5px;padding:2px 6px}@media(max-width:700px){.grid{grid-template-columns:1fr}main{padding-top:30px}}
+  </style>
+</head>
+<body><main>
+  <header>
+    <div class="eyebrow">DAVIE DESKTOP BODY · QUICK GUIDE</div>
+    <h1>不用找菜单，<br>直接叫 Davie。</h1>
+    <p class="lead">Stack-chan 是 Davie 的本地耳朵、摄像头、声音、表情和可转动的头。开机联网后，日常操作以语音为主；官方 Launcher 和 Settings 仍然保留。</p>
+  </header>
+
+  <h2>基本交互</h2>
+  <div class="grid">
+    <article class="card"><strong>1 · 唤醒</strong><span class="voice">“Davie”</span><br>看到进入 Listening 后再说完整需求。</article>
+    <article class="card"><strong>2 · 对话</strong><span class="voice">“How is the weather today?”</span><br>Davie 会延续同一设备会话的上下文与记忆。</article>
+    <article class="card"><strong>3 · 看东西</strong><span class="voice">“Davie, what do you see?”</span><br>摄像头真正拍照后才进行解释，不会假装看见。</article>
+    <article class="card"><strong>4 · 打断</strong>在 Davie 说话时直接讲话。旧语音会被取消，新问题会进入同一上下文。</article>
+  </div>
+
+  <h2>语音功能表</h2>
+  <table>
+    <thead><tr><th>想做什么</th><th>可以这样说</th><th>行为</th></tr></thead>
+    <tbody>
+      <tr><td>查看能力</td><td class="voice">Davie, what can you do?</td><td>本地立即回答，不调用大模型。</td></tr>
+      <tr><td>看并解释</td><td class="voice">Davie, look at this and explain it.</td><td>拍照、视觉理解、语音回答。</td></tr>
+      <tr><td>继续伴读</td><td class="voice">Davie, continue reading.</td><td>从断点继续；被打断的当前句会重读。</td></tr>
+      <tr><td>暂停伴读</td><td class="voice">Davie, pause reading.</td><td>立即暂停并保存进度。</td></tr>
+      <tr><td>停止伴读</td><td class="voice">Davie, stop reading.</td><td>停止并把下一次起点重置到开头。</td></tr>
+      <tr><td>查询进度</td><td class="voice">Davie, where did we stop in the book?</td><td>说出书名与大致进度。</td></tr>
+      <tr><td>提醒</td><td class="voice">Davie, remind me in ten minutes to take a break.</td><td>在设备本地创建提醒。</td></tr>
+      <tr><td>音量</td><td class="voice">Davie, set the volume to 45.</td><td>只有设备确认成功后才回答完成。</td></tr>
+      <tr><td>动作</td><td class="voice">Davie, turn your head left.</td><td>控制头部向左、右、上或回正。</td></tr>
+      <tr><td>灯光</td><td class="voice">Davie, set the LED to blue.</td><td>控制机身 LED 红、绿、蓝、白或关闭。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>屏幕与菜单</h2>
+  <p>不新增一套重复的复杂菜单。默认进入官方 AI Agent 界面，屏幕会用 <code>Listening</code>、<code>Looking</code>、<code>Reading</code>、<code>Speaking</code> 等状态告诉你当前动作。需要配网、音量、开机行为或其他官方功能时，再回到官方 Launcher 与 Settings。</p>
+  <div class="note"><strong>开机行为：</strong>Davie 版本在没有用户偏好时默认进入语音待命。如果你在 Settings 关闭“Start AI Agent on boot”，该明确选择会被保留，不会被固件强制覆盖。</div>
+
+  <h2>伴读如何使用</h2>
+  <p>书籍或文章由 Davie、Web、Telegram 或其他客户端通过认证 API 装载到 Gateway。内容和句子级进度保存在 Gateway，不依赖 TF 卡，设备重启后仍可继续。TF 卡未来可用于离线书库，但不是当前接入的必要条件。</p>
+  <p>内容可以在 Stack-chan 空闲或离线时预先装载。需要设备立即开口、拍照或执行硬件动作时，请先叫醒 <span class="voice">Davie</span> 建立当前会话；这是官方 1.4.3 的按需连接设计，可减少空闲功耗和无意义长连接。</p>
+
+  <h2>边界</h2>
+  <ul>
+    <li>摄像头是 0.3 MP，适合近距离物体和清晰大字，不适合远处小字或复杂扫描件。</li>
+    <li>喊出 “Davie” 后应等待 Listening 状态再说需求。</li>
+    <li>远程立即说话、拍照或控制硬件需要设备处于已连接的 Davie 会话；离线装载的伴读内容会保留。</li>
+    <li>语音、网络或模型服务不可用时，设备会明确提示，不会假装完成硬件动作。</li>
+    <li>真人近距离唤醒、房间回声以及播放中打断仍应在实际摆放位置做最终验收。</li>
+  </ul>
+</main></body>
+</html>

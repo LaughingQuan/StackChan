@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from stackchan_davie_gateway.app import create_app
 from stackchan_davie_gateway.clients import DavieReply
 from stackchan_davie_gateway.config import Settings
+from stackchan_davie_gateway.reader import ReaderLibrary
 
 
 class NullClient:
@@ -219,3 +220,53 @@ def test_camera_explain_rejects_device_token_and_oversized_image() -> None:
             **request,
         )
         assert response.status_code == 413
+
+
+def test_public_capabilities_and_admin_device_capabilities() -> None:
+    app = create_app(
+        Settings(device_token="device", davie_api_key="davie", admin_token="admin"),
+        media_client=NullClient(),
+        davie_client=NullClient(),
+        reader_library=ReaderLibrary(),
+    )
+    with TestClient(app) as client:
+        public = client.get("/v1/capabilities")
+        assert public.status_code == 200
+        assert public.json()["wake_word"] == "Davie"
+        assert client.get("/v1/devices/stackchan-1/capabilities").status_code == 401
+        device = client.get(
+            "/v1/devices/stackchan-1/capabilities",
+            headers={"Authorization": "Bearer admin"},
+        )
+        assert device.status_code == 200
+        assert device.json()["connected"] is False
+
+
+def test_reader_can_be_loaded_while_device_is_offline_and_is_persistent() -> None:
+    readers = ReaderLibrary()
+    app = create_app(
+        Settings(device_token="device", davie_api_key="davie", admin_token="admin"),
+        media_client=NullClient(),
+        davie_client=NullClient(),
+        reader_library=readers,
+    )
+    headers = {"Authorization": "Bearer admin"}
+    with TestClient(app) as client:
+        loaded = client.post(
+            "/v1/devices/stackchan-1/reader/load",
+            headers=headers,
+            json={"title": "A short book", "text": "First sentence. Second sentence."},
+        )
+        assert loaded.status_code == 200
+        assert loaded.json()["connected"] is False
+        status = client.get("/v1/devices/stackchan-1/reader", headers=headers)
+        assert status.json()["reader"]["segment_count"] == 2
+        assert client.post(
+            "/v1/devices/stackchan-1/reader/load",
+            headers=headers,
+            json={"title": "A short book", "text": "Text", "autoplay": True},
+        ).status_code == 409
+        cleared = client.delete("/v1/devices/stackchan-1/reader", headers=headers)
+        assert cleared.status_code == 200
+        assert cleared.json()["removed"] is True
+        assert cleared.json()["reader"]["segment_count"] == 0

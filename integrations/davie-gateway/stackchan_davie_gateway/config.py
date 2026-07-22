@@ -37,6 +37,8 @@ class Settings:
     max_spoken_sentences: int = 3
     max_spoken_chars: int = 520
     max_camera_image_bytes: int = 2_000_000
+    max_reader_chars: int = 500_000
+    reader_state_path: str = "/var/lib/stackchan-davie/readers.json"
 
     @property
     def websocket_url(self) -> str:
@@ -96,4 +98,8 @@ class Settings:
             endpoint_min_speech_ms=int(os.environ.get("STACKCHAN_ENDPOINT_MIN_SPEECH_MS", "240")),
             endpoint_max_turn_ms=int(os.environ.get("STACKCHAN_ENDPOINT_MAX_TURN_MS", "20000")),
             endpoint_min_rms=int(os.environ.get("STACKCHAN_ENDPOINT_MIN_RMS", "420")),
+            max_reader_chars=int(os.environ.get("STACKCHAN_MAX_READER_CHARS", "500000")),
+            reader_state_path=os.environ.get(
+                "STACKCHAN_READER_STATE_PATH", "/var/lib/stackchan-davie/readers.json"
+            ),
         )

@@ -25,6 +25,7 @@ PrivateTmp=true
 PrivateDevices=true
 ProtectHome=true
 ProtectSystem=strict
+StateDirectory=stackchan-davie
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true

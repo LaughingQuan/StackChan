@@ -9,7 +9,8 @@ import uuid
 from typing import Any, Callable, Protocol
 
 from .audio import OpusCodec, PcmEndpointDetector, iter_pcm_frames, pcm_to_wav, wav_to_pcm_async
-from .clients import DavieClient, MediaClient, sentence_segments, spoken_text
+from .capabilities import DeviceAction, capability_reply, parse_device_action
+from .clients import DavieClient, DavieReply, MediaClient, sentence_segments, spoken_text
 from .config import Settings
 from .protocol import (
     ClientHello,
@@ -20,6 +21,7 @@ from .protocol import (
     server_hello,
     unpack_audio_frame,
 )
+from .reader import ReaderState
 
 
 LOGGER = logging.getLogger(__name__)
@@ -29,6 +31,20 @@ VISUAL_REQUEST_PATTERN = re.compile(
     r"take (?:a )?(?:photo|picture)|camera|\u4f60\u770b\u5230|\u5e2e\u6211\u770b|\u770b\u770b|\u8fd9\u662f\u4ec0\u4e48|\u8bfb\u4e00\u4e0b|\u6444\u50cf\u5934)",
     re.IGNORECASE,
 )
+
+HEAD_POSITIONS = {
+    "left": {"yaw": -35, "pitch": 0, "speed": 180},
+    "right": {"yaw": 35, "pitch": 0, "speed": 180},
+    "up": {"yaw": 0, "pitch": 25, "speed": 180},
+    "center": {"yaw": 0, "pitch": 0, "speed": 180},
+}
+LED_COLORS = {
+    "red": {"red": 168, "green": 0, "blue": 0},
+    "green": {"red": 0, "green": 168, "blue": 0},
+    "blue": {"red": 0, "green": 0, "blue": 168},
+    "white": {"red": 100, "green": 100, "blue": 100},
+    "off": {"red": 0, "green": 0, "blue": 0},
+}
 
 
 class SessionTransport(Protocol):
@@ -50,6 +66,7 @@ class StackChanSession:
         device_id: str,
         client_id: str,
         codec_factory: Callable[[int, int, int], OpusCodec] = OpusCodec,
+        reader: ReaderState | None = None,
     ):
         self.transport = transport
         self.settings = settings
@@ -57,6 +74,7 @@ class StackChanSession:
         self.davie = davie
         self.device_id = device_id or "unknown-device"
         self.client_id = client_id or "unknown-client"
+        self.reader = reader or ReaderState(device_id=self.device_id)
         self.session_id = f"stackchan-{uuid.uuid4().hex}"
         self.davie_session_id: str | None = None
         self.hello: ClientHello | None = None
@@ -137,7 +155,7 @@ class StackChanSession:
                             "token": self.settings.device_token,
                         }
                     },
-                    "clientInfo": {"name": "stackchan-davie-gateway", "version": "0.1.0"},
+                    "clientInfo": {"name": "stackchan-davie-gateway", "version": "0.2.0"},
                 },
                 purpose="initialize",
             )
@@ -259,6 +277,8 @@ class StackChanSession:
         self.audio_frames_received += 1
         result = self.endpoint.feed(pcm)
         if result.speech_started and self._response_in_flight():
+            if self.reader.state == "playing":
+                self.reader.pause()
             await self.cancel_response(reason="barge_in")
             self.listening = True
         if result.complete_pcm:
@@ -316,6 +336,9 @@ class StackChanSession:
             await self.transport.send_json(
                 {"session_id": self.session_id, "type": "stt", "text": transcript}
             )
+            action = parse_device_action(transcript)
+            if action and await self._handle_device_action(action, generation):
+                return
             visual_reply = await self._visual_reply(transcript)
             if visual_reply:
                 reply = visual_reply
@@ -356,20 +379,138 @@ class StackChanSession:
         if "self.camera.take_photo" not in self.mcp_tools or not VISUAL_REQUEST_PATTERN.search(transcript):
             return None
         try:
-            result = await self.call_tool(
-                "self.camera.take_photo",
-                {"question": transcript},
-                timeout=120.0,
-            )
-            text = self._extract_tool_text(result)
+            text = await self.see(transcript, speak=False)
             if not text:
                 return None
-            from .clients import DavieReply
-
             return DavieReply(text=text, session_id=self.davie_session_id)
         except (ProtocolError, TimeoutError):
             LOGGER.warning("StackChan camera tool did not return a usable result", exc_info=True)
             return None
+
+    async def _handle_device_action(self, action: DeviceAction, generation: int) -> bool:
+        if action.kind == "help":
+            await self._speak(capability_reply(chinese=action.chinese), generation)
+            return True
+        if action.kind == "reader_pause":
+            changed = self.reader.pause()
+            text = "朗读已暂停。" if action.chinese else "Reading is paused."
+            if not changed and not self.reader.segments:
+                text = "还没有加载阅读内容。" if action.chinese else "No reading is loaded yet."
+            await self._speak(text, generation)
+            return True
+        if action.kind == "reader_resume":
+            if not self.reader.resume():
+                text = "没有可以继续的阅读内容。" if action.chinese else "There is no reading to continue."
+                await self._speak(text, generation)
+                return True
+            await self._run_reader(generation)
+            return True
+        if action.kind == "reader_stop":
+            changed = self.reader.stop()
+            text = "朗读已停止，下次会从开头开始。" if action.chinese else "Reading stopped. It will restart from the beginning."
+            if not changed:
+                text = "还没有加载阅读内容。" if action.chinese else "No reading is loaded yet."
+            await self._speak(text, generation)
+            return True
+        if action.kind == "reader_status":
+            status = self.reader.status()
+            if not status["segment_count"]:
+                text = "还没有加载阅读内容。" if action.chinese else "No reading is loaded yet."
+            elif action.chinese:
+                text = f"正在读《{status['title']}》，进度约百分之 {status['progress_percent']}。"
+            else:
+                text = f"We are reading {status['title']}, at about {status['progress_percent']} percent."
+            await self._speak(text, generation)
+            return True
+
+        tool_name = ""
+        arguments: dict[str, Any] = {}
+        success_en = "Done."
+        success_zh = "好了。"
+        if action.kind == "reminder":
+            tool_name = "self.robot.create_reminder"
+            arguments = action.arguments
+            success_en, success_zh = "Reminder set.", "提醒已设置。"
+        elif action.kind == "volume":
+            tool_name = "self.audio_speaker.set_volume"
+            arguments = action.arguments
+            success_en = f"Volume is set to {arguments['volume']}."
+            success_zh = f"音量已调到 {arguments['volume']}。"
+        elif action.kind == "head":
+            tool_name = "self.robot.set_head_angles"
+            arguments = HEAD_POSITIONS[action.arguments["direction"]]
+            success_en, success_zh = "I moved my head.", "我已经转动头部。"
+        elif action.kind == "led":
+            tool_name = "self.robot.set_led_color"
+            arguments = LED_COLORS[action.arguments["color"]]
+            success_en, success_zh = "The onboard light is set.", "机身灯已经设置。"
+        else:
+            return False
+
+        try:
+            await self.call_tool(tool_name, arguments)
+            text = success_zh if action.chinese else success_en
+        except (ProtocolError, TimeoutError):
+            LOGGER.warning("StackChan local action failed: %s", action.kind, exc_info=True)
+            text = "这个设备功能目前不可用。" if action.chinese else "That device control is unavailable right now."
+        await self._speak(text, generation)
+        return True
+
+    async def _run_reader(self, generation: int) -> None:
+        while generation == self.generation_id and self.reader.state == "playing":
+            segment = self.reader.current()
+            if segment is None:
+                break
+            status = self.reader.status()
+            await self.transport.send_json(
+                {
+                    "session_id": self.session_id,
+                    "type": "alert",
+                    "status": "Reading",
+                    "message": f"{status['title']} · {status['segment_number']}/{status['segment_count']}",
+                    "emotion": "happy",
+                }
+            )
+            self.last_response = segment
+            await self._speak(segment, generation)
+            if generation != self.generation_id or self.reader.state != "playing":
+                return
+            self.reader.advance()
+        if generation == self.generation_id and self.reader.state == "completed":
+            await self.transport.send_json(
+                {
+                    "session_id": self.session_id,
+                    "type": "alert",
+                    "status": "Reading complete",
+                    "message": self.reader.title,
+                    "emotion": "happy",
+                }
+            )
+
+    async def see(self, question: str, *, speak: bool = True) -> str:
+        if "self.camera.take_photo" not in self.mcp_tools:
+            raise ProtocolError("device camera tool is unavailable")
+        await self.transport.send_json(
+            {
+                "session_id": self.session_id,
+                "type": "alert",
+                "status": "Looking",
+                "message": "Using the camera",
+                "emotion": "neutral",
+            }
+        )
+        result = await self.call_tool(
+            "self.camera.take_photo",
+            {"question": question},
+            timeout=120.0,
+        )
+        text = self._extract_tool_text(result)
+        if not text:
+            raise ProtocolError("camera returned no explanation")
+        self.last_response = text
+        if speak:
+            await self.say(text)
+        return text
 
     @staticmethod
     def _extract_tool_text(result: dict[str, Any]) -> str:
@@ -393,6 +534,7 @@ class StackChanSession:
     async def _speak(self, text: str, generation: int) -> None:
         if not text:
             return
+        self.last_response = text
         self.speaking = True
         await self.transport.send_json({"session_id": self.session_id, "type": "llm", "emotion": "happy"})
         await self.transport.send_json({"session_id": self.session_id, "type": "tts", "state": "start"})
@@ -436,6 +578,8 @@ class StackChanSession:
             self._ensure_open()
             had_response = self.speaking or self._response_in_flight()
             if had_response:
+                if self.reader.state == "playing":
+                    self.reader.pause()
                 self.generation_id += 1
                 self.speaking = False
                 await self._cancel_response_task_locked()
@@ -452,11 +596,88 @@ class StackChanSession:
             generation = self.generation_id
             self.response_task = asyncio.create_task(self._speak(text, generation))
 
+    async def load_reader(self, *, title: str, text: str, autoplay: bool = False) -> dict[str, Any]:
+        async with self.response_lock:
+            self._ensure_open()
+            if self.speaking or self._response_in_flight():
+                if self.reader.state == "playing":
+                    self.reader.pause()
+                self.generation_id += 1
+                self.speaking = False
+                await self._cancel_response_task_locked()
+                await self.transport.send_json(
+                    {"session_id": self.session_id, "type": "tts", "state": "stop", "reason": "reader_load"}
+                )
+            self.reader.load(title, text)
+            if autoplay:
+                self._start_reader_locked()
+            return self.reader.status()
+
+    async def reader_play(self) -> dict[str, Any]:
+        async with self.response_lock:
+            self._ensure_open()
+            if self.hello is None or self.codec is None:
+                raise ProtocolError("device audio session is not ready")
+            if self.speaking or self._response_in_flight():
+                if self.reader.state == "playing":
+                    return self.reader.status()
+                self.generation_id += 1
+                self.speaking = False
+                await self._cancel_response_task_locked()
+                await self.transport.send_json(
+                    {"session_id": self.session_id, "type": "tts", "state": "stop", "reason": "reader_play"}
+                )
+            if not self.reader.resume():
+                raise ProtocolError("no resumable reading is loaded")
+            self._start_reader_locked(already_resumed=True)
+            return self.reader.status()
+
+    def _start_reader_locked(self, *, already_resumed: bool = False) -> None:
+        if self.hello is None or self.codec is None:
+            raise ProtocolError("device audio session is not ready")
+        if not already_resumed and not self.reader.resume():
+            raise ProtocolError("no resumable reading is loaded")
+        self.generation_id += 1
+        generation = self.generation_id
+        self.response_task = asyncio.create_task(self._run_reader(generation))
+
+    async def reader_pause(self) -> dict[str, Any]:
+        async with self.response_lock:
+            self._ensure_open()
+            was_playing = self.reader.state == "playing"
+            self.reader.pause()
+            if was_playing:
+                self.generation_id += 1
+                self.speaking = False
+                await self._cancel_response_task_locked()
+                self.interrupt_count += 1
+                await self.transport.send_json(
+                    {"session_id": self.session_id, "type": "tts", "state": "stop", "reason": "reader_pause"}
+                )
+            return self.reader.status()
+
+    async def reader_stop(self) -> dict[str, Any]:
+        async with self.response_lock:
+            self._ensure_open()
+            had_response = self.speaking or self._response_in_flight()
+            self.reader.stop()
+            if had_response:
+                self.generation_id += 1
+                self.speaking = False
+                await self._cancel_response_task_locked()
+                self.interrupt_count += 1
+                await self.transport.send_json(
+                    {"session_id": self.session_id, "type": "tts", "state": "stop", "reason": "reader_stop"}
+                )
+            return self.reader.status()
+
     async def cancel_response(self, *, reason: str) -> None:
         async with self.response_lock:
             if self.closed:
                 return
             had_response = self.speaking or self._response_in_flight()
+            if self.reader.state == "playing":
+                self.reader.pause()
             self.generation_id += 1
             self.speaking = False
             await self._cancel_response_task_locked()
@@ -476,6 +697,8 @@ class StackChanSession:
             if self.closed:
                 return
             self.closed = True
+            if self.reader.state == "playing":
+                self.reader.pause()
             self.generation_id += 1
             self.speaking = False
             await self._cancel_response_task_locked()
@@ -512,4 +735,5 @@ class StackChanSession:
             "mcp_initialized": self.mcp_initialized,
             "mcp_tool_count": len(self.mcp_tools),
             "mcp_tools": sorted(self.mcp_tools),
+            "reader": self.reader.status(),
         }

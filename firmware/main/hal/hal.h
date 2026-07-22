@@ -118,7 +118,12 @@ struct XiaozhiConfig_t {
     uint32_t idleShutdownTimeSeconds = 600;
     bool allowShutdownWhenCharging   = false;
     uint8_t idleRandomMovementLevel  = 2;
+#ifdef CONFIG_STACKCHAN_DAVIE_LOCAL_RUNTIME
+    // A Davie build is a voice-first endpoint unless the user explicitly disables this in Settings.
+    bool startAiAgentOnBoot = true;
+#else
     bool startAiAgentOnBoot          = false;
+#endif
 };
 
 /**

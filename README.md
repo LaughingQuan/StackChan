@@ -14,10 +14,13 @@ The local integration is split by responsibility:
   for the `Davie` wake command, device AEC, the `DAVIE` launcher label, and an
   assets-size-compatible official English speech model.
 - `integrations/davie-gateway/` is a portable Linux service that translates
-  the official Xiaozhi protocol to local ASR, Davie, TTS, and vision services.
+  the official Xiaozhi protocol to local ASR, Davie, TTS, vision, hardware
+  actions, and persistent read-aloud services.
 - `docs/DAVIE_LOCAL_RUNTIME_ARCHITECTURE.html` records the upgrade-safe design.
 - `docs/STACKCHAN_DAVIE_IMPLEMENTATION_2026-07-23.html` records the verified
   implementation and the remaining physical acceptance boundary.
+- `docs/STACKCHAN_DAVIE_USER_GUIDE_2026-07-23.html` is the human-facing voice
+  command, reader, camera, menu, and operating-boundary guide.
 
 Wi-Fi credentials and runtime tokens are intentionally absent from Git. Copy
 `firmware/sdkconfig.defaults.davie.example` to
@@ -25,7 +28,13 @@ Wi-Fi credentials and runtime tokens are intentionally absent from Git. Copy
 the official device provisioning flow for Wi-Fi.
 
 The TF card is optional. The current voice, camera, motion, display, OTA, and
-Davie paths do not depend on removable storage.
+Davie paths do not depend on removable storage. Reading progress is stored by
+the gateway and survives device or gateway restarts.
+
+The Davie build is voice-first. When no explicit device preference exists it
+boots directly into the official AI Agent, so the user can say `Davie` without
+opening an extra menu. The official launcher and Settings remain available;
+the Settings switch is still the authoritative user override.
 
 <img src="https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1205/K151_stack_chan_main_pictures_01.webp" width="60%">
 

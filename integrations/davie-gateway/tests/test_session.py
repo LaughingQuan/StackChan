@@ -5,6 +5,7 @@ import struct
 from dataclasses import dataclass
 
 from stackchan_davie_gateway.audio import pcm_to_wav
+from stackchan_davie_gateway.capabilities import DeviceAction
 from stackchan_davie_gateway.clients import DavieReply
 from stackchan_davie_gateway.config import Settings
 from stackchan_davie_gateway.session import StackChanSession
@@ -55,6 +56,11 @@ class FakeDavie:
         assert text == "Hello Davie"
         assert device_id == "device-1"
         return DavieReply("Hello Jason. How can I help?", session_id or "davie-session-1")
+
+
+class NoDavie:
+    async def chat(self, *_args, **_kwargs) -> DavieReply:
+        raise AssertionError("local device actions must not call Davie")
 
 
 def _pcm_frame(amplitude: int) -> bytes:
@@ -303,3 +309,121 @@ async def test_concurrent_say_keeps_only_latest_generation() -> None:
     assert session.interrupt_count == 1
     await session.close(close_transport=True)
     assert transport.closed is True
+
+
+async def test_help_command_is_answered_locally_without_model_call() -> None:
+    class HelpMedia(FakeMedia):
+        async def transcribe(self, _wav: bytes, *, hotwords: list[str]) -> str:
+            return "Davie, what can you do?"
+
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=HelpMedia(),
+        davie=NoDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    await session._process_turn(_pcm_frame(1800))
+    assert "look and explain" in session.last_response.lower() or any(
+        "look and explain" in str(item.get("text", "")).lower() for item in transport.json
+    )
+    assert transport.binary
+    await session.close()
+
+
+async def test_reader_barge_in_pauses_without_skipping_current_segment() -> None:
+    class SlowReaderMedia(FakeMedia):
+        async def synthesize(self, _text: str) -> bytes:
+            await asyncio.sleep(1)
+            return await super().synthesize(_text)
+
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(endpoint_min_rms=300),
+        media=SlowReaderMedia(),
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    await session.load_reader(title="Test book", text="First sentence. Second sentence.")
+    await session.reader_play()
+    await asyncio.sleep(0.01)
+    assert session.reader.state == "playing"
+    assert session.reader.current() == "First sentence."
+
+    await session.handle_binary(_pcm_frame(1800))
+    await session.handle_binary(_pcm_frame(1800))
+
+    assert session.reader.state == "paused"
+    assert session.reader.index == 0
+    assert session.reader.current() == "First sentence."
+    assert transport.json[-1]["reason"] == "barge_in"
+    await session.close()
+
+
+async def test_reader_play_completes_and_reports_progress() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=FakeMedia(),
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    await session.load_reader(title="Test book", text="First sentence. Second sentence.")
+    await session.reader_play()
+    assert session.response_task is not None
+    await asyncio.wait_for(session.response_task, timeout=3)
+    assert session.reader.state == "completed"
+    assert session.reader.status()["progress_percent"] == 100.0
+    assert any(item.get("status") == "Reading complete" for item in transport.json)
+    await session.close()
+
+
+async def test_local_capability_reply_updates_session_diagnostics() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=FakeMedia(),
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+
+    handled = await session._handle_device_action(
+        DeviceAction("help", chinese=False), session.generation_id
+    )
+
+    assert handled is True
+    assert session.last_response.startswith("I can talk with you")
+    assert session.status()["last_response"] == session.last_response
+    await session.close()

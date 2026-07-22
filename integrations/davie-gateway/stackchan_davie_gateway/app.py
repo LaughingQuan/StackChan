@@ -11,9 +11,11 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadF
 from pydantic import BaseModel, Field
 
 from .audio import OpusCodec
+from .capabilities import capability_manifest
 from .clients import DavieClient, MediaClient
 from .config import Settings
 from .protocol import ProtocolError
+from .reader import ReaderLibrary
 from .session import StackChanSession
 
 
@@ -25,6 +27,17 @@ class ToolCallRequest(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
 
 
+class VisionRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=500)
+    speak: bool = True
+
+
+class ReaderLoadRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    text: str = Field(min_length=1, max_length=1_000_000)
+    autoplay: bool = False
+
+
 DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9:._-]{1,128}$")
 
 
@@ -34,10 +47,12 @@ def create_app(
     media_client: MediaClient | None = None,
     davie_client: DavieClient | None = None,
     codec_factory: Callable[[int, int, int], OpusCodec] = OpusCodec,
+    reader_library: ReaderLibrary | None = None,
 ) -> FastAPI:
     config = settings or Settings.from_env()
     media = media_client or MediaClient(config.media_base_url)
     davie = davie_client or DavieClient(config.davie_base_url, config.davie_api_key)
+    readers = reader_library or ReaderLibrary(config.reader_state_path)
     sessions: dict[str, StackChanSession] = {}
     sessions_lock = asyncio.Lock()
 
@@ -69,14 +84,14 @@ def create_app(
         if davie_client is None:
             await davie.close()
 
-    app = FastAPI(title="StackChan Davie Gateway", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="StackChan Davie Gateway", version="0.2.0", lifespan=lifespan)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {
             "status": "ok",
             "service": "stackchan-davie-gateway",
-            "version": "0.1.0",
+            "version": "0.2.0",
             "connected_devices": len(sessions),
             "device_auth_configured": bool(config.device_token),
             "davie_auth_configured": bool(config.davie_api_key),
@@ -84,6 +99,10 @@ def create_app(
             "media_base_url": config.media_base_url,
             "davie_base_url": config.davie_base_url,
         }
+
+    @app.get("/v1/capabilities")
+    async def capabilities() -> dict[str, Any]:
+        return capability_manifest()
 
     @app.api_route("/xiaozhi/ota/", methods=["GET", "POST"])
     async def ota_bootstrap(_request: Request) -> dict[str, Any]:
@@ -102,6 +121,22 @@ def create_app(
     async def devices(authorization: str | None = Header(default=None)) -> dict[str, Any]:
         require_admin(authorization)
         return {"devices": [session.status() for session in sessions.values()]}
+
+    @app.get("/v1/devices/{device_id}/capabilities")
+    async def device_capabilities(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        session = sessions.get(device_id)
+        manifest = capability_manifest()
+        return {
+            **manifest,
+            "device_id": device_id,
+            "connected": session is not None,
+            "mcp_tools": sorted(session.mcp_tools) if session else [],
+            "reader": (session.reader if session else readers.for_device(device_id)).status(),
+        }
 
     @app.post("/v1/vision/explain")
     async def vision_explain(
@@ -152,6 +187,127 @@ def create_app(
         await session.say(body.text)
         return {"status": "accepted", "device_id": device_id}
 
+    @app.post("/v1/devices/{device_id}/vision")
+    async def device_vision(
+        device_id: str,
+        body: VisionRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        session = sessions.get(device_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="device is not connected")
+        try:
+            result = await session.see(body.question, speak=body.speak)
+        except (ProtocolError, TimeoutError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"status": "ok", "device_id": device_id, "result": result, "spoken": body.speak}
+
+    @app.post("/v1/devices/{device_id}/reader/load")
+    async def reader_load(
+        device_id: str,
+        body: ReaderLoadRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        if len(body.text) > config.max_reader_chars:
+            raise HTTPException(status_code=413, detail="reader content is too large")
+        session = sessions.get(device_id)
+        try:
+            if session:
+                reader_status = await session.load_reader(
+                    title=body.title,
+                    text=body.text,
+                    autoplay=body.autoplay,
+                )
+            else:
+                if body.autoplay:
+                    raise HTTPException(status_code=409, detail="device is not connected for autoplay")
+                reader = readers.for_device(device_id)
+                reader.load(body.title, body.text)
+                reader_status = reader.status()
+        except (ProtocolError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"status": "accepted", "device_id": device_id, "connected": session is not None, "reader": reader_status}
+
+    @app.get("/v1/devices/{device_id}/reader")
+    async def reader_status(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        session = sessions.get(device_id)
+        reader = session.reader if session else readers.for_device(device_id)
+        return {"device_id": device_id, "connected": session is not None, "reader": reader.status()}
+
+    @app.post("/v1/devices/{device_id}/reader/play")
+    async def reader_play(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        session = sessions.get(device_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="device is not connected")
+        try:
+            status = await session.reader_play()
+        except ProtocolError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"status": "accepted", "device_id": device_id, "reader": status}
+
+    @app.post("/v1/devices/{device_id}/reader/pause")
+    async def reader_pause(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        session = sessions.get(device_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="device is not connected")
+        return {"status": "ok", "device_id": device_id, "reader": await session.reader_pause()}
+
+    @app.post("/v1/devices/{device_id}/reader/stop")
+    async def reader_stop(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        session = sessions.get(device_id)
+        if not session:
+            reader = readers.for_device(device_id)
+            reader.stop()
+            return {"status": "ok", "device_id": device_id, "connected": False, "reader": reader.status()}
+        return {"status": "ok", "device_id": device_id, "connected": True, "reader": await session.reader_stop()}
+
+    @app.delete("/v1/devices/{device_id}/reader")
+    async def reader_clear(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        session = sessions.get(device_id)
+        if session:
+            await session.reader_stop()
+            session.reader.clear()
+            return {
+                "status": "ok",
+                "device_id": device_id,
+                "connected": True,
+                "removed": True,
+                "reader": session.reader.status(),
+            }
+        reader = readers.for_device(device_id)
+        removed = reader.clear()
+        status = reader.status()
+        readers.remove(device_id)
+        return {
+            "status": "ok",
+            "device_id": device_id,
+            "connected": False,
+            "removed": removed,
+            "reader": status,
+        }
+
     @app.post("/v1/devices/{device_id}/tools/{tool_name}")
     async def call_tool(
         device_id: str,
@@ -190,6 +346,7 @@ def create_app(
             device_id=device_id,
             client_id=client_id,
             codec_factory=codec_factory,
+            reader=readers.for_device(device_id),
         )
         async with sessions_lock:
             previous = sessions.get(device_id)

@@ -28,7 +28,12 @@ struct XiaozhiConfig_t {
     uint32_t idleShutdownTimeSeconds = 600;
     bool allowShutdownWhenCharging   = false;
     uint8_t idleRandomMovementLevel  = 2;
+#ifdef CONFIG_STACKCHAN_DAVIE_LOCAL_RUNTIME
+    // Preserve the official setting as an override; only the unset default changes for Davie builds.
+    bool startAiAgentOnBoot = true;
+#else
     bool startAiAgentOnBoot          = false;
+#endif
 };
 
 void lock();
