@@ -1,0 +1,12 @@
+name: jm-stackchan
+version: 0.1.0
+description: >-
+  Davie's local StackChan body adapter. Exposes explicit, testable tools for
+  health/capability discovery and, when the device is awake, speech, vision,
+  reading, and conservative device control through the authenticated local
+  StackChan gateway.
+author: JM / Codex
+kind: standalone
+provides_tools:
+  - stackchan_status
+

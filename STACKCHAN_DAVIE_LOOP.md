@@ -37,6 +37,12 @@ handoff:
 
 ## Claims
 
+### 【进行中】Codex 2026-07-23 04:16 Asia/Singapore — Davie callable StackChan integration   (TTL 30m)
+- 正在改: integrations/hermes-stackchan/**, integrations/davie-gateway/**（仅在合同缺口需要时）, docs/**, STACKCHAN_DAVIE_LOOP.md, /Users/jm2m/.hermes/plugins/jm-stackchan/**（独立安装副本）
+- 目标: 让 Davie 通过解耦工具调用 StackChan 的状态、说话、视觉、伴读和设备控制，并逐项验证；不直接修改脏 Hermes 核心。
+- 验证: 新集成单测/MCP或插件发现测试、gateway 38 项回归、零付费 production smoke、tracked secret scan、git diff/status。
+- 边界: ¥0；不调用云端模型；不改 Davie executor/proactivity；不提交凭据；不将设备在线或音轨订阅冒充真人声学通过。
+
 ### 【已关闭】Codex 2026-07-23 02:30 Asia/Singapore — official firmware, local gateway, and physical acceptance
 - 改动: firmware/main/CMakeLists.txt, firmware/sdkconfig.defaults.davie.example, integrations/davie-gateway/**, STACKCHAN_DAVIE_LOOP.md, project documentation
 - 结果: official 1.4.3 Davie integration verified and deployed; human close-range acoustic wake/interruption remains an explicit physical acceptance item
@@ -77,3 +83,17 @@ handoff:
 | Gateway | Live vision and session continuity | passed | Real image analyzed; camera response reuses active spoken Davie session |
 | Recovery | Factory and pre-Davie backup | passed | NAS full-flash/NVS images and SHA-256 manifests verified; restore commands documented |
 | Repository | Intent and credential audit | passed | Staged diff contains only intentional project files; secrets, Wi-Fi config, runtime env, build output, and private LAN defaults are excluded |
+
+### 【完成】Codex 2026-07-23 04:22 Asia/Singapore — Davie StackChan status/capability tool
+- 发现: StackChan 高层 API 已存在，但 Davie 没有独立工具发现 Gateway 健康、设备会话和能力；直接改 Hermes 核心会与 325 个在途改动耦合。
+- 修复: 新增独立 `jm-stackchan` 插件骨架、标准库 Gateway client、只读 `stackchan_status` 工具及脱敏错误合同。
+- 验证: `pytest -q integrations/hermes-stackchan/test_plugin.py` -> 4 passed；Gateway `uv run pytest -q` -> 38 passed；`compileall`、`git diff --check` exit 0。
+- 花费: ¥0；没有调用任何模型或云端 API。
+- 边界: 未改 Hermes 核心，未泄露 token/设备标识，未声称真人声学通过。
+- 后续: 实现主动说话与摄像头解释工具，并分别验证在线/离线错误语义。
+
+### 【进行中】Codex 2026-07-23 04:22 Asia/Singapore — Davie StackChan speech and vision tools   (TTL 30m)
+- 正在改: integrations/hermes-stackchan/**, STACKCHAN_DAVIE_LOOP.md
+- 目标: 注册 `stackchan_say` 与 `stackchan_vision`，自动选择唯一在线或默认设备，离线时给出可执行唤醒提示。
+- 验证: 插件 HTTP 合同单测、Gateway 38 项回归、compileall、diff check。
+- 边界: ¥0；不调用模型；不伪造真实扬声器/摄像头验收。
