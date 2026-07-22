@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stack-chan Davie Local Runtime Architecture</title>
+  <style>
+    :root {
+      --ink: #16332f;
+      --muted: #64736f;
+      --paper: #f7f1e4;
+      --panel: #fffaf0;
+      --line: #d9cfbb;
+      --accent: #e15b3d;
+      --green: #1d5a4d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(22, 51, 47, .035) 1px, transparent 1px),
+        var(--paper);
+      background-size: 100% 32px;
+      font-family: "Avenir Next", "PingFang SC", sans-serif;
+      line-height: 1.65;
+    }
+    main { width: min(1060px, calc(100% - 32px)); margin: 0 auto; padding: 64px 0 96px; }
+    header { border-bottom: 2px solid var(--ink); padding-bottom: 28px; margin-bottom: 32px; }
+    .eyebrow { color: var(--accent); font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+    h1 { margin: 8px 0 12px; font-family: Georgia, "Songti SC", serif; font-size: clamp(38px, 7vw, 72px); line-height: 1; }
+    h2 { margin: 0 0 12px; font-family: Georgia, "Songti SC", serif; font-size: 30px; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0 0 12px; }
+    code { padding: 2px 6px; border-radius: 5px; background: #ebe2d1; }
+    .lead { max-width: 820px; color: var(--muted); font-size: 19px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin: 22px 0 34px; }
+    .card { padding: 22px; border: 1px solid var(--line); background: rgba(255, 250, 240, .88); box-shadow: 0 14px 34px rgba(22, 51, 47, .06); }
+    .card strong { color: var(--green); }
+    .rule { border-left: 5px solid var(--accent); padding: 16px 20px; margin: 22px 0 34px; background: var(--panel); font-size: 18px; }
+    table { width: 100%; border-collapse: collapse; margin: 16px 0 34px; background: rgba(255, 250, 240, .88); }
+    th, td { padding: 13px 14px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #e8dfcf; }
+    ol { margin: 12px 0 34px; padding-left: 24px; }
+    li { margin: 8px 0; }
+    .status { display: inline-block; margin-top: 10px; padding: 6px 10px; color: #fff; background: var(--green); font-size: 13px; font-weight: 800; letter-spacing: .08em; }
+    @media (max-width: 720px) { main { padding-top: 36px; } .grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Architecture contract · 2026-07-22</div>
+    <h1>Official core.<br>Local Davie.</h1>
+    <p class="lead">以 M5Stack 官方 Stack-chan 1.4.3 公开源码为硬件与交互基线，只增加可关闭、可测试、可替换的 Davie 本地运行时适配层。</p>
+    <span class="status">UPSTREAM-FIRST</span>
+  </header>
+
+  <section>
+    <h2>不可破坏的原则</h2>
+    <div class="rule">凡是官方已经实现并可满足需求的功能，直接复用。只有官方没有提供接口或行为不满足验收合同时，才允许增加最小桥接补丁。</div>
+    <div class="grid">
+      <article class="card"><h3>官方所有</h3><p>AEC、VAD、WakeNet、双麦克风、Opus、音频编解码、摄像头、屏幕、表情、舵机、BLE 配网、Wi-Fi、OTA 与设备状态机。</p></article>
+      <article class="card"><h3>Davie 所有</h3><p>会话、记忆、工具、知识库、任务编排、深度模型路由、书籍进度与跨设备连续性。</p></article>
+      <article class="card"><h3>Adapter 所有</h3><p>官方 WebSocket/Opus/MCP 合同与 Davie 事件之间的转换、generation、播放回执、打断回执和摄像头请求。</p></article>
+      <article class="card"><h3>本地配置所有</h3><p>Wi-Fi、Rock5B 地址、设备令牌和服务端点只进入 <code>sdkconfig.defaults.local</code> 或设备 NVS，不进入 Git。</p></article>
+    </div>
+  </section>
+
+  <section>
+    <h2>代码边界</h2>
+    <table>
+      <thead><tr><th>区域</th><th>策略</th><th>升级影响</th></tr></thead>
+      <tbody>
+        <tr><td><code>firmware/main/hal</code><br><code>firmware/main/apps</code></td><td>默认保持官方原样</td><td>直接跟随 upstream</td></tr>
+        <tr><td><code>firmware/xiaozhi-esp32</code></td><td>保持官方锁定版本与补丁流程</td><td>先跑协议 fixture 再升级</td></tr>
+        <tr><td><code>integrations/davie-gateway</code></td><td>新增独立服务，兼容官方 WebSocket、Opus 与 MCP</td><td>不与官方目录冲突</td></tr>
+        <tr><td><code>firmware/main/davie</code></td><td>仅在官方协议无法覆盖需求时启用</td><td>feature flag 可完全关闭</td></tr>
+        <tr><td><code>docs</code> 与 <code>tests/contracts</code></td><td>记录差异和跨版本行为</td><td>每次 rebase 必跑</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>实现顺序</h2>
+    <ol>
+      <li>原样构建官方 1.4.3，并验证屏幕、舵机、摄像头、双麦克风、扬声器、BLE 和官方状态机。</li>
+      <li>在 Rock5B 实现兼容官方 WebSocket 协议的 Davie Gateway，先做到固件零改动接入。</li>
+      <li>验证双向 Opus、设备 AEC、播放中 abort、STT/LLM/TTS 状态和 MCP 工具发现。</li>
+      <li>为唤醒词 “Davie” 增加独立策略：先服务端验证，后续再导入经实机验收的本地 WakeNet 模型。</li>
+      <li>增加任务型菜单：Talk to Davie、Read with me、Look and explain、Capture note、Today、Device status。</li>
+      <li>接入 16GB TF 可选缓存；无卡时所有核心功能仍通过网络工作。</li>
+      <li>完成断网、重连、长时间播放、打断、双讲、摄像头和恢复镜像验收后再发布。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>升级流程</h2>
+    <p><code>origin</code> 指向 LaughingQuan fork，<code>upstream</code> 只允许 fetch。升级时先同步官方分支，再 rebase <code>feat/davie-local-runtime</code>，最后依次执行官方测试、协议 fixture、固件构建和实体设备回归。</p>
+    <p>设备原厂 1.4.4 的完整 16MB 镜像继续作为恢复与差异对照，不将公开 1.4.3 源码错误标记成 1.4.4。</p>
+  </section>
+</main>
+</body>
+</html>
