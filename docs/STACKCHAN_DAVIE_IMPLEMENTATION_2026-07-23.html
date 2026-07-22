@@ -58,6 +58,7 @@
       <tr><td>设备工具</td><td>语音帮助、提醒、音量、头部和 LED 由本地路由直接调用官方 MCP；普通对话不会被错误截获，只有工具确认后才回答成功。</td><td><span class="ok">PRODUCTION SMOKE</span></td></tr>
       <tr><td>伴读</td><td>文章与书籍按句切分；支持装载、播放、暂停、继续、停止、卸载和进度查询；打断不跳句，状态原子持久化并跨重启恢复。</td><td><span class="ok">PRODUCTION SMOKE</span></td></tr>
       <tr><td>Davie 接口</td><td>提供认证的 speak、vision、reader 和 MCP bridge；Davie 不需要理解底层设备协议。设备离线时可预装伴读内容。</td><td><span class="ok">PASSED</span></td></tr>
+      <tr><td>Hermes 插件</td><td>独立用户插件提供 status、say、vision、reader、control 和 reminder 六个工具；已启用到 CLI、Web/API、Telegram 与飞书，不修改 Hermes 核心源码。</td><td><span class="ok">26 TESTS + LIVE TRACE</span></td></tr>
       <tr><td>安全隔离</td><td>设备、Davie 和管理员凭据分别由 systemd credential 文件注入；Git 中无真实凭据。</td><td><span class="ok">PASSED</span></td></tr>
       <tr><td>TF 卡</td><td>核心路径不依赖 TF 卡；预留后续书籍缓存、离线进度和恢复素材。</td><td><span class="ok">OPTIONAL</span></td></tr>
     </tbody>
@@ -74,6 +75,7 @@
     <li>视觉 E2E 使用真实 JPEG，经 Davie 多模态接口返回与画面一致的具体描述。</li>
     <li>实体设备固件已刷写并保留原 NVS；启动日志确认自动进入 AI Agent、Davie 唤醒模型、AEC、摄像头和完整官方 MCP 均已载入。</li>
     <li>生产服务已升级到 0.2.0 并处于 active，持久化目录可写，健康接口正常，未修改无关 Davie/Hermes 服务。</li>
+    <li>Hermes 用户插件测试 26 项通过；生产 Davie 会话 trace 显示延迟工具桥真实执行 <code>stackchan_status</code>，返回 Gateway 0.2.0 正常、设备当前未连接，没有把注册状态冒充物理在线。</li>
   </ul>
 
   <div class="note"><strong>诚实边界：</strong>自动化播放的远距离合成 “Davie” 未形成可靠声学触发证据，因此真人近距离唤醒、真实环境回声与播放中打断仍需由人在设备旁最终验收。模型载入日志不能替代这项物理证据。官方 1.4.3 采用唤醒后按需建立 WebSocket；离线可预装伴读内容，但远程即时开口、拍照和控制需要当前设备会话已连接。</div>
@@ -94,6 +96,17 @@ uv sync --dev
 uv run pytest -q
 uv build
 # Install the wheel on a Linux host and use deploy/stackchan-davie-gateway.service.</pre>
+
+  <h3>Hermes / Davie 插件</h3>
+  <pre>cd integrations/hermes-stackchan
+python3 -m unittest -v test_plugin.py test_install.py
+python3 install.py
+hermes plugins enable jm-stackchan
+hermes tools enable --platform cli stackchan
+hermes tools enable --platform api_server stackchan
+hermes tools enable --platform telegram stackchan
+hermes tools enable --platform feishu stackchan</pre>
+  <p>安装器只复制独立用户插件并写入 <code>~/.hermes/stackchan.json</code>；管理员令牌使用单独的 0600 文件，不进入仓库或聊天记录。插件更新后应重启 Gateway，并用会话 trace 验证真实工具调用。</p>
 
   <h2>恢复路径</h2>
   <p>NAS 已保存原厂 1.4.4 完整 16 MiB 镜像以及接入前完整镜像和 NVS 单独备份。恢复前先核验对应目录中的 SHA256SUMS，然后执行：</p>

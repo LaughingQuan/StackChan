@@ -42,6 +42,21 @@
     </tbody>
   </table>
 
+  <h2>从 Davie 聊天控制</h2>
+  <p>Telegram、飞书、Hermes Web 和命令行使用同一组 Stack-chan 能力。自然地告诉 Davie 要让机器人做什么即可；Davie 会先检查 Gateway 和当前设备会话，不会把“工具已配置”误报成“机器人已经执行”。</p>
+  <table>
+    <thead><tr><th>聊天需求</th><th>示例</th><th>离线时会怎样</th></tr></thead>
+    <tbody>
+      <tr><td>检查连接</td><td>检查一下 Stack-chan 现在能不能用。</td><td>仍可返回 Gateway 健康与设备是否已唤醒。</td></tr>
+      <tr><td>让机器人开口</td><td>让 Stack-chan 说：“该休息一下了。”</td><td>明确提示先在设备旁说 “Davie”。</td></tr>
+      <tr><td>查看面前物体</td><td>让 Stack-chan 看看面前是什么，不要朗读结果。</td><td>不伪造画面；提示建立当前设备会话。</td></tr>
+      <tr><td>预装伴读</td><td>把这篇 TXT、Markdown 或 HTML 装载到 Stack-chan，先不要播放。</td><td>可以预装并保留进度，不要求设备在线。</td></tr>
+      <tr><td>控制设备</td><td>把 Stack-chan 音量调到 45，头向左转 30 度。</td><td>不声称动作成功；提示先唤醒。</td></tr>
+      <tr><td>本地提醒</td><td>让 Stack-chan 十分钟后提醒我休息。</td><td>设备本地提醒需要在线；持久任务应改用 Davie 定时任务。</td></tr>
+    </tbody>
+  </table>
+  <div class="note"><strong>聊天与语音的区别：</strong>聊天可以在机器人离线时预装伴读内容和查询 Gateway；即时开口、拍照、音量、头部、LED 与设备本地提醒必须先在 Stack-chan 旁说 “Davie”，让官方固件建立当前会话。</div>
+
   <h2>屏幕与菜单</h2>
   <p>不新增一套重复的复杂菜单。默认进入官方 AI Agent 界面，屏幕会用 <code>Listening</code>、<code>Looking</code>、<code>Reading</code>、<code>Speaking</code> 等状态告诉你当前动作。需要配网、音量、开机行为或其他官方功能时，再回到官方 Launcher 与 Settings。</p>
   <div class="note"><strong>开机行为：</strong>Davie 版本在没有用户偏好时默认进入语音待命。如果你在 Settings 关闭“Start AI Agent on boot”，该明确选择会被保留，不会被固件强制覆盖。</div>
