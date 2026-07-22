@@ -62,6 +62,21 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                 return
             self._json({"device_id": "stackchan-main", "connected": bool(self.devices), "reader": self.reader})
             return
+        if self.path == "/v1/devices/stackchan-main/capabilities":
+            if self.headers.get("Authorization") != f"Bearer {self.token}":
+                self._json({"detail": "invalid admin token"}, 401)
+                return
+            self._json(
+                {
+                    "connected": bool(self.devices),
+                    "mcp_tools": [
+                        "self.audio_speaker.set_volume",
+                        "self.robot.set_head_angles",
+                        "self.robot.set_led_color",
+                    ],
+                }
+            )
+            return
         self._json({"detail": "not found"}, 404)
 
     def do_POST(self):
@@ -96,6 +111,16 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             action = self.path.rsplit("/", 1)[-1]
             type(self).reader["state"] = {"play": "playing", "pause": "paused", "stop": "stopped"}[action]
             self._json({"status": "ok", "device_id": "stackchan-main", "connected": bool(type(self).devices), "reader": type(self).reader})
+            return
+        if self.path.startswith("/v1/devices/stackchan-main/tools/"):
+            self._json(
+                {
+                    "status": "ok",
+                    "device_id": "stackchan-main",
+                    "tool": self.path.rsplit("/", 1)[-1],
+                    "result": True,
+                }
+            )
             return
         self._json({"detail": "not found"}, 404)
 
@@ -276,6 +301,56 @@ def test_reader_rejects_source_outside_configured_roots(gateway, tmp_path):
     assert result["error"] == "reader_source_not_allowed"
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "path", "arguments"),
+    [
+        (
+            {"action": "volume", "volume": 45},
+            "/v1/devices/stackchan-main/tools/self.audio_speaker.set_volume",
+            {"volume": 45},
+        ),
+        (
+            {"action": "head", "yaw": -30, "pitch": 20, "speed": 150},
+            "/v1/devices/stackchan-main/tools/self.robot.set_head_angles",
+            {"yaw": -30, "pitch": 20, "speed": 150},
+        ),
+        (
+            {"action": "led", "red": 0, "green": 0, "blue": 168},
+            "/v1/devices/stackchan-main/tools/self.robot.set_led_color",
+            {"red": 0, "green": 0, "blue": 168},
+        ),
+    ],
+)
+def test_control_maps_only_allowlisted_actions(gateway, kwargs, path, arguments):
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+
+    result = client.control(**kwargs)
+
+    assert result["ok"] is True
+    assert _GatewayHandler.requests[-1] == (path, {"arguments": arguments})
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"action": "volume", "volume": 101},
+        {"action": "head"},
+        {"action": "head", "yaw": -129},
+        {"action": "led", "red": 169, "green": 0, "blue": 0},
+        {"action": "arbitrary_tool", "volume": 10},
+    ],
+)
+def test_control_rejects_invalid_or_unlisted_actions_before_network(gateway, kwargs):
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+    before = list(_GatewayHandler.requests)
+
+    result = json.loads(client_module.json_result(client.control, **kwargs))
+
+    assert result["ok"] is False
+    assert result["error"].startswith("control_")
+    assert _GatewayHandler.requests == before
+
+
 def test_plugin_registers_status_speech_and_vision_tools():
     calls = []
 
@@ -289,9 +364,10 @@ def test_plugin_registers_status_speech_and_vision_tools():
     plugin_module.register(Context())
 
     tools = {item[1]["name"]: item[1] for item in calls if item[0] == "tool"}
-    assert set(tools) == {"stackchan_status", "stackchan_say", "stackchan_vision", "stackchan_reader"}
+    assert set(tools) == {"stackchan_status", "stackchan_say", "stackchan_vision", "stackchan_reader", "stackchan_control"}
     assert all(tool["toolset"] == "stackchan" for tool in tools.values())
     assert tools["stackchan_status"]["handler"] is plugin_module._handle_status
     assert tools["stackchan_say"]["handler"] is plugin_module._handle_say
     assert tools["stackchan_vision"]["handler"] is plugin_module._handle_vision
     assert tools["stackchan_reader"]["handler"] is plugin_module._handle_reader
+    assert tools["stackchan_control"]["handler"] is plugin_module._handle_control

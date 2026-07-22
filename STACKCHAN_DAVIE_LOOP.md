@@ -125,3 +125,17 @@ handoff:
 - 目标: 仅暴露经过固件合同验证的高层设备动作，禁止任意 MCP 名称/参数透传。
 - 验证: 映射与边界单测、未知动作拒绝、Gateway 38 项回归、compileall、diff check。
 - 边界: ¥0；不调用模型；不声称真实舵机/LED 物理变化通过。
+
+### 【完成】Codex 2026-07-23 04:31 Asia/Singapore — Davie StackChan device controls
+- 发现: Gateway 有通用 MCP 透传入口，但直接暴露会允许模型发明工具名和越界参数。
+- 修复: 新增 `stackchan_control`，只映射固件确认的 volume/head/LED 三类动作，并在发网前验证所有范围。
+- 验证: 插件测试 19 passed（含 3 类映射及 5 类拒绝）；Gateway 回归 38 passed；compileall/diff check exit 0。
+- 花费: ¥0。
+- 边界: 未暴露任意 MCP 透传，未声称真实舵机/LED 物理动作通过。
+- 后续: 补齐本地提醒创建、查看和停止。
+
+### 【进行中】Codex 2026-07-23 04:31 Asia/Singapore — Davie StackChan local reminders   (TTL 30m)
+- 正在改: integrations/hermes-stackchan/**, STACKCHAN_DAVIE_LOOP.md
+- 目标: 通过固件白名单 MCP 合同创建/list/stop 设备本地提醒。
+- 验证: reminder 映射/边界单测、Gateway 38 项回归、compileall、diff check。
+- 边界: ¥0；不把本地提醒描述成跨重启持久日历任务。

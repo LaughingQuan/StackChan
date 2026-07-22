@@ -108,6 +108,34 @@ READER_SCHEMA = {
     },
 }
 
+CONTROL_SCHEMA = {
+    "name": "stackchan_control",
+    "description": (
+        "Control only the allow-listed physical functions of Davie's local StackChan body: speaker "
+        "volume, head angles, or onboard LED RGB. The robot must be awake. Do not use this for room "
+        "lights or unrelated devices, and do not invent MCP tool names."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["volume", "head", "led"]},
+            "volume": {"type": "integer", "minimum": 0, "maximum": 100},
+            "yaw": {
+                "type": "integer",
+                "minimum": -128,
+                "maximum": 128,
+                "description": "Horizontal degrees; negative is StackChan's left. Prefer +/-45 for natural motion.",
+            },
+            "pitch": {"type": "integer", "minimum": 0, "maximum": 90},
+            "speed": {"type": "integer", "minimum": 100, "maximum": 1000, "description": "150 is natural."},
+            "red": {"type": "integer", "minimum": 0, "maximum": 168},
+            "green": {"type": "integer", "minimum": 0, "maximum": 168},
+            "blue": {"type": "integer", "minimum": 0, "maximum": 168},
+        },
+        "required": ["action"],
+    },
+}
+
 
 def _config() -> StackChanConfig:
     return StackChanConfig.load()
@@ -153,6 +181,20 @@ def _handle_reader(args: dict[str, Any], **_kwargs: Any) -> str:
     )
 
 
+def _handle_control(args: dict[str, Any], **_kwargs: Any) -> str:
+    return json_result(
+        StackChanClient(_config()).control,
+        str(args.get("action") or ""),
+        volume=args.get("volume"),
+        yaw=args.get("yaw"),
+        pitch=args.get("pitch"),
+        speed=args.get("speed", 150),
+        red=args.get("red"),
+        green=args.get("green"),
+        blue=args.get("blue"),
+    )
+
+
 def _command_status(_raw_args: str = "") -> str:
     try:
         payload = StackChanClient(_config()).status(include_capabilities=False)
@@ -167,6 +209,7 @@ def register(ctx: Any) -> None:
         (SAY_SCHEMA, _handle_say, "🔊"),
         (VISION_SCHEMA, _handle_vision, "👁"),
         (READER_SCHEMA, _handle_reader, "📖"),
+        (CONTROL_SCHEMA, _handle_control, "🎛"),
     ):
         ctx.register_tool(
             name=schema["name"],

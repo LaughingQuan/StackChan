@@ -424,6 +424,76 @@ class StackChanClient:
             **({"removed": bool(payload.get("removed"))} if normalized == "clear" else {}),
         }
 
+    @staticmethod
+    def _integer(value: Any, *, name: str, minimum: int, maximum: int) -> int:
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise StackChanError("control_argument_invalid", f"{name} must be an integer")
+        if value < minimum or value > maximum:
+            raise StackChanError(
+                "control_argument_out_of_range",
+                f"{name} must be between {minimum} and {maximum}",
+            )
+        return value
+
+    def control(
+        self,
+        action: str,
+        *,
+        volume: Any = None,
+        yaw: Any = None,
+        pitch: Any = None,
+        speed: Any = 150,
+        red: Any = None,
+        green: Any = None,
+        blue: Any = None,
+    ) -> dict[str, Any]:
+        normalized = action.strip().lower()
+        if normalized == "volume":
+            tool_name = "self.audio_speaker.set_volume"
+            arguments = {
+                "volume": self._integer(volume, name="volume", minimum=0, maximum=100)
+            }
+        elif normalized == "head":
+            if yaw is None and pitch is None:
+                raise StackChanError(
+                    "control_argument_missing", "head control needs yaw, pitch, or both"
+                )
+            arguments = {"speed": self._integer(speed, name="speed", minimum=100, maximum=1000)}
+            if yaw is not None:
+                arguments["yaw"] = self._integer(yaw, name="yaw", minimum=-128, maximum=128)
+            if pitch is not None:
+                arguments["pitch"] = self._integer(
+                    pitch, name="pitch", minimum=0, maximum=90
+                )
+            tool_name = "self.robot.set_head_angles"
+        elif normalized == "led":
+            tool_name = "self.robot.set_led_color"
+            arguments = {
+                "red": self._integer(red, name="red", minimum=0, maximum=168),
+                "green": self._integer(green, name="green", minimum=0, maximum=168),
+                "blue": self._integer(blue, name="blue", minimum=0, maximum=168),
+            }
+        else:
+            raise StackChanError(
+                "control_action_invalid", "StackChan control supports volume, head, or led"
+            )
+        device_id = self.resolve_device_id()
+        payload = self._request(
+            "POST",
+            self._device_path(
+                device_id, f"tools/{urllib.parse.quote(tool_name, safe='')}"
+            ),
+            body={"arguments": arguments},
+            authenticated=True,
+        )
+        return {
+            "ok": payload.get("status") == "ok",
+            "status": payload.get("status"),
+            "device": "configured_or_only_connected",
+            "action": normalized,
+            "result": payload.get("result"),
+        }
+
     def status(self, *, include_capabilities: bool = True) -> dict[str, Any]:
         health = self.health()
         result: dict[str, Any] = {
