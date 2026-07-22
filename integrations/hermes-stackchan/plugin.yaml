@@ -9,4 +9,5 @@ author: JM / Codex
 kind: standalone
 provides_tools:
   - stackchan_status
-
+  - stackchan_say
+  - stackchan_vision

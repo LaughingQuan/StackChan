@@ -214,6 +214,88 @@ class StackChanClient:
         devices = payload.get("devices")
         return [item for item in devices if isinstance(item, dict)] if isinstance(devices, list) else []
 
+    def resolve_device_id(self, explicit_device_id: str = "") -> str:
+        requested = explicit_device_id.strip()
+        if requested and not DEVICE_ID_PATTERN.fullmatch(requested):
+            raise StackChanError("invalid_device_id", "StackChan device identity is invalid")
+        connected_ids = [
+            str(item.get("device_id") or "").strip()
+            for item in self.devices()
+            if DEVICE_ID_PATTERN.fullmatch(str(item.get("device_id") or "").strip())
+        ]
+        preferred = requested or self.config.default_device_id
+        if preferred:
+            if preferred in connected_ids:
+                return preferred
+            raise StackChanError(
+                "device_not_connected",
+                "StackChan is online but not in an active Davie voice session",
+                retryable=True,
+                next_step="Say 'Davie' near StackChan to wake it, then retry the action.",
+            )
+        if len(connected_ids) == 1:
+            return connected_ids[0]
+        if len(connected_ids) > 1:
+            raise StackChanError(
+                "device_selection_required",
+                "More than one StackChan is connected and no default device is configured",
+                next_step="Configure a default StackChan device before retrying.",
+            )
+        raise StackChanError(
+            "device_not_connected",
+            "No StackChan is currently in an active Davie voice session",
+            retryable=True,
+            next_step="Say 'Davie' near StackChan to wake it, then retry the action.",
+        )
+
+    def _device_path(self, device_id: str, suffix: str) -> str:
+        return f"/v1/devices/{urllib.parse.quote(device_id, safe='')}/{suffix.lstrip('/')}"
+
+    def say(self, text: str) -> dict[str, Any]:
+        spoken_text = text.strip()
+        if not spoken_text:
+            raise StackChanError("text_required", "StackChan speech text is required")
+        if len(spoken_text) > 1000:
+            raise StackChanError(
+                "text_too_long", "StackChan immediate speech is limited to 1000 characters"
+            )
+        device_id = self.resolve_device_id()
+        payload = self._request(
+            "POST",
+            self._device_path(device_id, "say"),
+            body={"text": spoken_text},
+            authenticated=True,
+        )
+        return {
+            "ok": payload.get("status") == "accepted",
+            "status": payload.get("status"),
+            "device": "configured_or_only_connected",
+            "characters": len(spoken_text),
+        }
+
+    def vision(self, question: str, *, speak: bool = True) -> dict[str, Any]:
+        prompt = question.strip()
+        if not prompt:
+            raise StackChanError("question_required", "A camera question is required")
+        if len(prompt) > 500:
+            raise StackChanError(
+                "question_too_long", "StackChan camera questions are limited to 500 characters"
+            )
+        device_id = self.resolve_device_id()
+        payload = self._request(
+            "POST",
+            self._device_path(device_id, "vision"),
+            body={"question": prompt, "speak": bool(speak)},
+            authenticated=True,
+        )
+        return {
+            "ok": payload.get("status") == "ok",
+            "status": payload.get("status"),
+            "device": "configured_or_only_connected",
+            "result": str(payload.get("result") or ""),
+            "spoken": bool(payload.get("spoken")),
+        }
+
     def status(self, *, include_capabilities: bool = True) -> dict[str, Any]:
         health = self.health()
         result: dict[str, Any] = {
@@ -258,4 +340,3 @@ def json_result(callable_, *args, **kwargs) -> str:
         return json.dumps(callable_(*args, **kwargs), ensure_ascii=False)
     except StackChanError as exc:
         return json.dumps(exc.as_dict(), ensure_ascii=False)
-

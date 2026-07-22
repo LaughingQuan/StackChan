@@ -97,3 +97,17 @@ handoff:
 - 目标: 注册 `stackchan_say` 与 `stackchan_vision`，自动选择唯一在线或默认设备，离线时给出可执行唤醒提示。
 - 验证: 插件 HTTP 合同单测、Gateway 38 项回归、compileall、diff check。
 - 边界: ¥0；不调用模型；不伪造真实扬声器/摄像头验收。
+
+### 【完成】Codex 2026-07-23 04:24 Asia/Singapore — Davie StackChan speech and vision tools
+- 发现: Gateway 的主动说话/摄像头能力只能在设备活跃会话中使用，Davie 需要自动选中默认/唯一设备，并在离线时明确要求用户说 `Davie` 唤醒。
+- 修复: 新增 `stackchan_say`、`stackchan_vision`，实现受认证设备选择、输入长度约束、视觉静默模式及脱敏离线错误。
+- 验证: 插件测试 7 passed；Gateway 回归 38 passed；compileall/diff check exit 0。
+- 花费: ¥0；测试未调用任何模型。
+- 边界: 未把模拟 HTTP 结果表述为真实扬声器/摄像头物理通过。
+- 后续: 实现可恢复伴读的 load/status/play/pause/resume/stop/clear。
+
+### 【进行中】Codex 2026-07-23 04:24 Asia/Singapore — Davie StackChan resumable reader tool   (TTL 30m)
+- 正在改: integrations/hermes-stackchan/**, STACKCHAN_DAVIE_LOOP.md
+- 目标: 让 Davie 可离线预装文章/书籍并在设备唤醒后逐句播放、暂停和续读。
+- 验证: reader HTTP 合同测试、输入边界测试、Gateway 38 项回归、compileall、diff check。
+- 边界: ¥0；不解析原始二进制文件，复用 Davie Document Intake 提取后的文本；不声称真人听声通过。

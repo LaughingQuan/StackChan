@@ -28,6 +28,8 @@ plugin_module = _load_module("jm_stackchan_test", HERE / "__init__.py")
 
 class _GatewayHandler(BaseHTTPRequestHandler):
     token = "test-admin-token"
+    devices = [{"device_id": "stackchan-main", "state": "listening"}]
+    requests = []
 
     def log_message(self, _format, *_args):
         return
@@ -51,13 +53,37 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             if self.headers.get("Authorization") != f"Bearer {self.token}":
                 self._json({"detail": "invalid admin token"}, 401)
                 return
-            self._json({"devices": [{"device_id": "stackchan-main", "state": "listening"}]})
+            self._json({"devices": self.devices})
+            return
+        self._json({"detail": "not found"}, 404)
+
+    def do_POST(self):
+        if self.headers.get("Authorization") != f"Bearer {self.token}":
+            self._json({"detail": "invalid admin token"}, 401)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(length) or b"{}")
+        self.requests.append((self.path, body))
+        if self.path == "/v1/devices/stackchan-main/say":
+            self._json({"status": "accepted", "device_id": "stackchan-main"})
+            return
+        if self.path == "/v1/devices/stackchan-main/vision":
+            self._json(
+                {
+                    "status": "ok",
+                    "device_id": "stackchan-main",
+                    "result": "I can see a red book.",
+                    "spoken": bool(body.get("speak")),
+                }
+            )
             return
         self._json({"detail": "not found"}, 404)
 
 
 @pytest.fixture
 def gateway(tmp_path):
+    _GatewayHandler.devices = [{"device_id": "stackchan-main", "state": "listening"}]
+    _GatewayHandler.requests = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _GatewayHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -123,7 +149,47 @@ def test_http_credential_failure_never_leaks_token(gateway):
     assert "wrong-secret-value" not in json.dumps(result)
 
 
-def test_plugin_registers_only_read_only_status_tool():
+def test_say_selects_configured_connected_device_and_posts_plain_text(gateway):
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+
+    result = client.say("  Hello from Davie.  ")
+
+    assert result == {
+        "ok": True,
+        "status": "accepted",
+        "device": "configured_or_only_connected",
+        "characters": 17,
+    }
+    assert _GatewayHandler.requests[-1] == (
+        "/v1/devices/stackchan-main/say",
+        {"text": "Hello from Davie."},
+    )
+
+
+def test_vision_returns_answer_and_respects_visual_only_mode(gateway):
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+
+    result = client.vision("What is in front of you?", speak=False)
+
+    assert result["ok"] is True
+    assert result["result"] == "I can see a red book."
+    assert result["spoken"] is False
+    assert _GatewayHandler.requests[-1][1]["speak"] is False
+
+
+def test_immediate_output_fails_with_actionable_wake_instruction(gateway):
+    _GatewayHandler.devices = []
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+
+    result = json.loads(client_module.json_result(client.say, "Hello"))
+
+    assert result["error"] == "device_not_connected"
+    assert result["retryable"] is True
+    assert "Say 'Davie'" in result["next_step"]
+    assert not _GatewayHandler.requests
+
+
+def test_plugin_registers_status_speech_and_vision_tools():
     calls = []
 
     class Context:
@@ -135,7 +201,9 @@ def test_plugin_registers_only_read_only_status_tool():
 
     plugin_module.register(Context())
 
-    tool = next(item[1] for item in calls if item[0] == "tool")
-    assert tool["name"] == "stackchan_status"
-    assert tool["toolset"] == "stackchan"
-    assert tool["handler"] is plugin_module._handle_status
+    tools = {item[1]["name"]: item[1] for item in calls if item[0] == "tool"}
+    assert set(tools) == {"stackchan_status", "stackchan_say", "stackchan_vision"}
+    assert all(tool["toolset"] == "stackchan" for tool in tools.values())
+    assert tools["stackchan_status"]["handler"] is plugin_module._handle_status
+    assert tools["stackchan_say"]["handler"] is plugin_module._handle_say
+    assert tools["stackchan_vision"]["handler"] is plugin_module._handle_vision
