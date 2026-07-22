@@ -153,3 +153,17 @@ handoff:
 - 目标: 以独立插件安装，不改 325 项脏 Hermes 核心；六个工具在真实 Hermes registry 可发现。
 - 验证: 安装脚本单测/干跑、插件 list/status、registry 六工具、Gateway 生产只读 smoke、源/安装 hash 一致。
 - 边界: ¥0；secret 只写 0600 文件且不输出；不直接重排 config.yaml。
+
+### 【完成】Codex 2026-07-23 04:41 Asia/Singapore — install and register jm-stackchan
+- 发现: Hermes 0.18.2 首次 `plugins enable` 存在时序缺口，只写 `plugins.enabled` 而未把新 toolset 加入平台；配置文件还受 `uchg` 完整性锁保护。
+- 修复: 新增可重复安装器与文档；secret 独立 0600；用官方 `hermes tools enable --platform` 补齐 cli/telegram/feishu 等平台后恢复 `uchg`。未修改 Hermes 源码。
+- 验证: 安装器+插件 26 passed；Gateway 38 passed；生产 registry 6 tools；cli/telegram/feishu 均解析 `stackchan=true`；源/安装 hash 相同；真实 Gateway health 及临时离线 reader load/status/clear 通过。
+- 花费: ¥0；没有模型调用。
+- 边界: token 未输出/入库；配置已 NAS 备份；未强行修改 Hermes 不识别的 `teams` 平台。
+- 后续: 重启 Davie Gateway，让长驻进程载入插件并执行真实会话 smoke。
+
+### 【进行中】Codex 2026-07-23 04:41 Asia/Singapore — production Davie StackChan activation   (TTL 30m)
+- 正在改: 仅运行态 Gateway 重启、验证日志、docs/**, STACKCHAN_DAVIE_LOOP.md
+- 目标: 长驻 Davie 加载六个 StackChan 工具，Web/Telegram/Feishu 共用同一注册结果。
+- 验证: pre/post PID、health、启动日志无新 traceback、实际 agent tool schema/status smoke、Gateway/插件回归。
+- 边界: ¥0；不发送用户消息、不调用云端；不更新 integrity baseline 直到全量检查完成。
