@@ -38,8 +38,11 @@ CAPABILITIES: tuple[dict[str, str], ...] = (
     },
     {
         "id": "session_control",
-        "label": "Sleep and wake",
-        "description": "End the current voice session explicitly, then wake Davie again when needed.",
+        "label": "Voice session lifecycle",
+        "description": (
+            "End the current voice session explicitly. A person wakes the device locally by "
+            "saying the configured wake phrase."
+        ),
     },
 )
 
@@ -108,6 +111,19 @@ def capability_manifest() -> dict[str, Any]:
         "assistant": "Davie",
         "interaction": "voice_first",
         "wake_word": "Davie",
+        "voice_session": {
+            "wake": {
+                "method": "device_local_voice",
+                "phrase": "Davie",
+                "instruction": "Say 'Davie' near the device, then wait for the screen to show Listening.",
+            },
+            "end": {
+                "voice_phrases": ["Goodbye Davie", "Go to sleep", "休息吧"],
+                "tool": {"name": "stackchan_control", "arguments": {"action": "sleep"}},
+            },
+            "idle_timeout_seconds": 120,
+            "remote_wake_supported": False,
+        },
         "screen_menu": "official_launcher",
         "capabilities": list(CAPABILITIES),
         "example_voice_commands": [

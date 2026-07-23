@@ -48,7 +48,30 @@ class _GatewayHandler(BaseHTTPRequestHandler):
             self._json({"status": "ok", "service": "stackchan-davie-gateway", "version": "0.3.0"})
             return
         if self.path == "/v1/capabilities":
-            self._json({"capabilities": [{"id": "vision", "label": "Look and explain"}]})
+            self._json(
+                {
+                    "wake_word": "Davie",
+                    "voice_session": {
+                        "wake": {
+                            "method": "device_local_voice",
+                            "phrase": "Davie",
+                            "instruction": (
+                                "Say 'Davie' near the device, then wait for the screen to show Listening."
+                            ),
+                        },
+                        "end": {
+                            "voice_phrases": ["Goodbye Davie", "Go to sleep", "休息吧"],
+                            "tool": {
+                                "name": "stackchan_control",
+                                "arguments": {"action": "sleep"},
+                            },
+                        },
+                        "idle_timeout_seconds": 120,
+                        "remote_wake_supported": False,
+                    },
+                    "capabilities": [{"id": "vision", "label": "Look and explain"}],
+                }
+            )
             return
         if self.path == "/v1/devices":
             if self.headers.get("Authorization") != f"Bearer {self.token}":
@@ -187,13 +210,31 @@ def test_status_reports_gateway_device_and_capability_without_identity(gateway):
     result = client_module.StackChanClient(config).status()
 
     assert result["ok"] is True
+    assert result["gateway_reachable"] is True
     assert result["gateway"]["version"] == "0.3.0"
+    assert result["live_state"] == {
+        "evidence": "authenticated_device_query",
+        "physical_status": "active_session",
+        "physical_device_session_active": True,
+        "safe_current_status": (
+            "StackChan Gateway is reachable and an active physical device session is connected."
+        ),
+    }
+    assert "Gateway reachability" in result["claim_policy"]
     assert result["device"] == {
         "connected_count": 1,
         "configured": True,
         "configured_device_connected": True,
         "ready_for_immediate_output": True,
     }
+    assert result["human_operations"]["wake"]["phrase"] == "Davie"
+    assert result["human_operations"]["wake"]["method"] == "device_local_voice"
+    assert result["human_operations"]["end"]["voice_phrases"] == [
+        "Goodbye Davie",
+        "Go to sleep",
+        "休息吧",
+    ]
+    assert result["human_operations"]["remote_wake_supported"] is False
     assert result["capabilities"] == [{"id": "vision", "label": "Look and explain"}]
     assert "stackchan-main" not in json.dumps(result)
     assert _GatewayHandler.token not in json.dumps(result)
@@ -210,7 +251,24 @@ def test_status_keeps_health_when_admin_token_is_missing(gateway):
     assert result["ok"] is True
     assert result["admin_credentials_configured"] is False
     assert result["device_query"]["error"] == "admin_credentials_missing"
+    assert result["live_state"]["physical_status"] == "unknown"
+    assert result["live_state"]["physical_device_session_active"] is None
+    assert result["device"]["ready_for_immediate_output"] is False
     assert "capabilities" not in result
+
+
+def test_status_does_not_treat_gateway_health_as_robot_presence(gateway):
+    _GatewayHandler.devices = []
+    config = client_module.StackChanConfig.load(gateway)
+
+    result = client_module.StackChanClient(config).status(include_capabilities=False)
+
+    assert result["gateway_reachable"] is True
+    assert result["live_state"]["physical_status"] == "no_active_session"
+    assert result["live_state"]["physical_device_session_active"] is False
+    assert result["device"]["connected_count"] == 0
+    assert result["device"]["ready_for_immediate_output"] is False
+    assert "Do not report the robot as ready or online" in result["live_state"]["safe_current_status"]
 
 
 def test_http_credential_failure_never_leaks_token(gateway):
@@ -223,6 +281,7 @@ def test_http_credential_failure_never_leaks_token(gateway):
 
     assert result["ok"] is True
     assert result["device_query"]["error"] == "admin_credentials_rejected"
+    assert result["live_state"]["physical_status"] == "unknown"
     assert "wrong-secret-value" not in json.dumps(result)
 
 
@@ -444,6 +503,7 @@ def test_plugin_registers_status_speech_and_vision_tools():
     assert set(tools) == {"stackchan_status", "stackchan_say", "stackchan_vision", "stackchan_reader", "stackchan_control", "stackchan_reminder"}
     assert all(tool["toolset"] == "stackchan" for tool in tools.values())
     assert tools["stackchan_status"]["handler"] is plugin_module._handle_status
+    assert "MANDATORY live-state check" in tools["stackchan_status"]["description"]
     assert tools["stackchan_say"]["handler"] is plugin_module._handle_say
     assert tools["stackchan_vision"]["handler"] is plugin_module._handle_vision
     assert tools["stackchan_reader"]["handler"] is plugin_module._handle_reader

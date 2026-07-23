@@ -21,6 +21,7 @@ from .config import Settings
 from .protocol import ProtocolError
 from .reader import ReaderLibrary
 from .session import StackChanSession
+from .version import __version__
 
 
 class SayRequest(BaseModel):
@@ -103,14 +104,14 @@ def create_app(
         if davie_client is None:
             await davie.close()
 
-    app = FastAPI(title="StackChan Davie Gateway", version="0.3.0", lifespan=lifespan)
+    app = FastAPI(title="StackChan Davie Gateway", version=__version__, lifespan=lifespan)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {
             "status": "ok",
             "service": "stackchan-davie-gateway",
-            "version": "0.3.0",
+            "version": __version__,
             "connected_devices": len(sessions),
             "recent_sessions": len(recent_sessions),
             "device_auth_configured": bool(config.device_token),

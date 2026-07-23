@@ -18,9 +18,11 @@ from stackchan_client import StackChanClient, StackChanConfig, StackChanError, j
 STATUS_SCHEMA = {
     "name": "stackchan_status",
     "description": (
-        "Check Davie's local StackChan body, current device-session readiness, and available "
-        "voice/vision/reader/control capabilities. Use this before saying the robot cannot help, "
-        "and before immediate speech, camera, or device-control actions. This is a zero-model local check."
+        "MANDATORY live-state check before saying Davie's StackChan body is currently connected, "
+        "ready, awake, listening, available, offline, or usable now. Knowledge/RAG only describes "
+        "capabilities and history; it never proves current physical state. Gateway health alone also "
+        "does not prove an active robot session. Use this before immediate speech, camera, or device "
+        "control actions. This is a zero-model local check."
     ),
     "parameters": {
         "type": "object",

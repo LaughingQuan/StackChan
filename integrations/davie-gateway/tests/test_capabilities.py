@@ -8,6 +8,19 @@ def test_capability_manifest_is_voice_first_and_names_wake_word() -> None:
     assert manifest["assistant"] == "Davie"
     assert manifest["wake_word"] == "Davie"
     assert manifest["interaction"] == "voice_first"
+    assert manifest["voice_session"] == {
+        "wake": {
+            "method": "device_local_voice",
+            "phrase": "Davie",
+            "instruction": "Say 'Davie' near the device, then wait for the screen to show Listening.",
+        },
+        "end": {
+            "voice_phrases": ["Goodbye Davie", "Go to sleep", "休息吧"],
+            "tool": {"name": "stackchan_control", "arguments": {"action": "sleep"}},
+        },
+        "idle_timeout_seconds": 120,
+        "remote_wake_supported": False,
+    }
     assert {item["id"] for item in manifest["capabilities"]} >= {
         "vision",
         "reader",

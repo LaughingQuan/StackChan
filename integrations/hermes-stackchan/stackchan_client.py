@@ -588,8 +588,10 @@ class StackChanClient:
 
     def status(self, *, include_capabilities: bool = True) -> dict[str, Any]:
         health = self.health()
+        gateway_reachable = health.get("status") == "ok"
         result: dict[str, Any] = {
-            "ok": health.get("status") == "ok",
+            "ok": gateway_reachable,
+            "gateway_reachable": gateway_reachable,
             "gateway": {
                 "status": health.get("status"),
                 "service": health.get("service"),
@@ -597,25 +599,78 @@ class StackChanClient:
             },
             "admin_credentials_configured": bool(self.config.read_admin_token()),
         }
+        device_query_succeeded = True
         try:
             devices = self.devices()
         except StackChanError as exc:
             result["device_query"] = exc.as_dict()
             devices = []
+            device_query_succeeded = False
         configured_connected = bool(
             self.config.default_device_id
             and any(item.get("device_id") == self.config.default_device_id for item in devices)
+        )
+        physical_device_session_active = configured_connected or (
+            not self.config.default_device_id and len(devices) == 1
+        )
+        if not device_query_succeeded:
+            physical_status = "unknown"
+            safe_current_status = (
+                "StackChan Gateway is reachable, but the physical device-session state is unknown "
+                "because the authenticated device query failed."
+            )
+        elif physical_device_session_active:
+            physical_status = "active_session"
+            safe_current_status = (
+                "StackChan Gateway is reachable and an active physical device session is connected."
+            )
+        else:
+            physical_status = "no_active_session"
+            safe_current_status = (
+                "StackChan Gateway is reachable, but no active physical device session is connected. "
+                "Do not report the robot as ready or online."
+            )
+        result["live_state"] = {
+            "evidence": "authenticated_device_query" if device_query_succeeded else "unavailable",
+            "physical_status": physical_status,
+            "physical_device_session_active": (
+                physical_device_session_active if device_query_succeeded else None
+            ),
+            "safe_current_status": safe_current_status,
+        }
+        result["claim_policy"] = (
+            "This result is the live-state authority. Capability documents and Gateway reachability "
+            "must not be used to claim that the physical robot is connected, ready, or audible."
         )
         result["device"] = {
             "connected_count": len(devices),
             "configured": bool(self.config.default_device_id),
             "configured_device_connected": configured_connected,
-            "ready_for_immediate_output": configured_connected or (
-                not self.config.default_device_id and len(devices) == 1
+            "ready_for_immediate_output": (
+                physical_device_session_active if device_query_succeeded else False
             ),
         }
+        manifest = self.capabilities()
+        voice_session = manifest.get("voice_session")
+        if isinstance(voice_session, dict):
+            result["human_operations"] = voice_session
+        else:
+            result["human_operations"] = {
+                "wake": {
+                    "method": "device_local_voice",
+                    "phrase": str(manifest.get("wake_word") or "Davie"),
+                    "instruction": (
+                        "Say 'Davie' near the device, then wait for the screen to show Listening."
+                    ),
+                },
+                "end": {
+                    "voice_phrases": ["Goodbye Davie", "Go to sleep", "休息吧"],
+                    "tool": {"name": "stackchan_control", "arguments": {"action": "sleep"}},
+                },
+                "idle_timeout_seconds": 120,
+                "remote_wake_supported": False,
+            }
         if include_capabilities:
-            manifest = self.capabilities()
             capabilities = manifest.get("capabilities")
             result["capabilities"] = [
                 {"id": item.get("id"), "label": item.get("label")}

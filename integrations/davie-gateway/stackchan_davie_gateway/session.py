@@ -36,6 +36,7 @@ from .protocol import (
     unpack_audio_frame,
 )
 from .reader import ReaderState
+from .version import __version__
 
 
 LOGGER = logging.getLogger(__name__)
@@ -193,7 +194,7 @@ class StackChanSession:
                             "token": self.settings.device_token,
                         }
                     },
-                    "clientInfo": {"name": "stackchan-davie-gateway", "version": "0.3.0"},
+                    "clientInfo": {"name": "stackchan-davie-gateway", "version": __version__},
                 },
                 purpose="initialize",
             )
