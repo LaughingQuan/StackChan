@@ -85,6 +85,13 @@ handoff:
 - 花费: ¥0。
 - 边界: 尚未更新已安装插件和 Rock5B 生产服务；下一阶段先提交原子变更，再执行备份、部署和 live smoke。
 
+### 【完成】Codex 2026-07-23 23:36 Asia/Singapore — production 0.3.0 and post-disconnect evidence
+- 发现: 会话一断开就从 `/v1/devices` 消失，导致真人测试后无法诊断到底是空音频、ASR 拒绝、误打断还是正常 sleep。
+- 修复: 增加受认证的 bounded recent-session evidence（默认 20 条、无原始音频）；新增可重复 lifecycle live smoke；Rock5B 0.2.0 软件/配置已备份到 NAS，0.3.0 已安装并重启；本机 Hermes 插件副本已原子更新且源/安装 hash 一致。
+- 验证: Gateway 48 passed；完整 live voice smoke 通过 `hello/stt/llm/tts` 并返回 138,240 PCM bytes，8.998 秒完成；lifecycle smoke 验证 ready 状态、admin sleep、Sleeping 事件和 transport close 全通过；生产 PID 更新、health 0.3.0、日志无新错误。
+- 花费: ¥0；完整语音 smoke 只调用本地 NVIDIA 与本地 Davie。
+- 边界: 没有把协议 smoke 当成真人唤醒/人耳播放证据；Hermes 长驻 Gateway 将在最终全量门禁后统一重启加载插件。
+
 
 ### 【完成】Codex 2026-07-23 03:05 Asia/Singapore — official StackChan 1.4.3 Davie local runtime
 - 发现: stock firmware already provided the required camera, duplex audio, motion, OTA, MCP, provisioning, and AI Agent lifecycle; the narrowest maintainable design was an upstream-first build flag plus a decoupled Xiaozhi/Davie gateway. A live vision-follow-up bug was also found: camera requests used a stable memory key instead of the active spoken session.

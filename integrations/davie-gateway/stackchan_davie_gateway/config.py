@@ -44,6 +44,7 @@ class Settings:
     camera_snapshot_dir: str = "/var/lib/stackchan-davie/camera"
     max_reader_chars: int = 500_000
     reader_state_path: str = "/var/lib/stackchan-davie/readers.json"
+    recent_session_limit: int = 20
 
     @property
     def websocket_url(self) -> str:
@@ -121,5 +122,8 @@ class Settings:
             max_reader_chars=int(os.environ.get("STACKCHAN_MAX_READER_CHARS", "500000")),
             reader_state_path=os.environ.get(
                 "STACKCHAN_READER_STATE_PATH", "/var/lib/stackchan-davie/readers.json"
+            ),
+            recent_session_limit=int(
+                os.environ.get("STACKCHAN_RECENT_SESSION_LIMIT", "20")
             ),
         )

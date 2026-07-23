@@ -13,6 +13,14 @@ class NullClient:
         return None
 
 
+class NullCodec:
+    def __init__(self, _input_rate: int, _output_rate: int, _frame_duration: int):
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
 class VisionDavie(NullClient):
     def __init__(self):
         self.received: list[tuple[str, bytes, str, str, str | None]] = []
@@ -105,6 +113,50 @@ def test_admin_routes_require_the_separate_admin_token() -> None:
             "/v1/devices/offline/sleep",
             headers={"Authorization": "Bearer admin-secret"},
         ).status_code == 404
+        assert client.get("/v1/sessions/recent").status_code == 401
+
+
+def test_closed_session_diagnostics_remain_available_without_raw_audio() -> None:
+    app = create_app(
+        Settings(
+            device_token="device-secret",
+            davie_api_key="davie-secret",
+            admin_token="admin-secret",
+        ),
+        media_client=NullClient(),
+        davie_client=NullClient(),
+        codec_factory=NullCodec,
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/xiaozhi/v1/",
+            headers={
+                "Authorization": "Bearer device-secret",
+                "Device-Id": "stackchan-history",
+                "Client-Id": "history-client",
+            },
+        ) as websocket:
+            websocket.send_text(
+                '{"type":"hello","version":1,"transport":"websocket",'
+                '"features":{"mcp":false},"audio_params":{"format":"opus",'
+                '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+            )
+            assert websocket.receive_json()["type"] == "hello"
+
+        history = client.get(
+            "/v1/sessions/recent",
+            headers={"Authorization": "Bearer admin-secret"},
+        )
+        health = client.get("/health")
+
+    assert history.status_code == 200
+    sessions = history.json()["sessions"]
+    assert len(sessions) == 1
+    assert sessions[0]["device_id"] == "stackchan-history"
+    assert sessions[0]["session_state"] == "closed"
+    assert sessions[0]["close_reason"] == "connection_closed"
+    assert "audio" not in sessions[0]
+    assert health.json()["recent_sessions"] == 1
 
 
 def test_runtime_validation_fails_closed_without_credentials() -> None:

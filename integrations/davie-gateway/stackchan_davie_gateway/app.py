@@ -5,6 +5,7 @@ import hmac
 import os
 import re
 import time
+from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Callable
@@ -69,6 +70,9 @@ def create_app(
     davie = davie_client or DavieClient(config.davie_base_url, config.davie_api_key)
     readers = reader_library or ReaderLibrary(config.reader_state_path)
     sessions: dict[str, StackChanSession] = {}
+    recent_sessions: deque[dict[str, Any]] = deque(
+        maxlen=max(1, config.recent_session_limit)
+    )
     sessions_lock = asyncio.Lock()
 
     def require_admin(authorization: str | None) -> None:
@@ -108,6 +112,7 @@ def create_app(
             "service": "stackchan-davie-gateway",
             "version": "0.3.0",
             "connected_devices": len(sessions),
+            "recent_sessions": len(recent_sessions),
             "device_auth_configured": bool(config.device_token),
             "davie_auth_configured": bool(config.davie_api_key),
             "admin_auth_configured": bool(config.admin_token),
@@ -136,6 +141,13 @@ def create_app(
     async def devices(authorization: str | None = Header(default=None)) -> dict[str, Any]:
         require_admin(authorization)
         return {"devices": [session.status() for session in sessions.values()]}
+
+    @app.get("/v1/sessions/recent")
+    async def session_history(
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        return {"sessions": list(recent_sessions)}
 
     @app.get("/v1/devices/{device_id}/capabilities")
     async def device_capabilities(
@@ -427,6 +439,7 @@ def create_app(
                 if sessions.get(device_id) is session:
                     sessions.pop(device_id, None)
             await session.close()
+            recent_sessions.appendleft(session.status())
 
     return app
 

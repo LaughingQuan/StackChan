@@ -70,6 +70,7 @@ Live local voice and camera smokes:
 
 ```bash
 uv run python scripts/live_smoke.py
+uv run python scripts/lifecycle_smoke.py
 uv run python scripts/vision_smoke.py --prompt "Describe this image." /path/to/image.jpg
 ```
 
@@ -113,6 +114,7 @@ Administrator routes require the distinct admin token:
 
 ```text
 GET  /v1/devices
+GET  /v1/sessions/recent
 GET  /v1/capabilities
 GET  /v1/devices/{device_id}/capabilities
 POST /v1/devices/{device_id}/say
@@ -137,6 +139,8 @@ connected. Offline reader loading and persisted checkpoints do not.
 `GET /v1/devices` exposes lifecycle, endpoint, transcription-quality, and
 barge-in evidence. Network reachability, a connected WebSocket, or synthetic
 audio is not accepted as proof of human wake-word or audible playback quality.
+After a device disconnects, the same bounded diagnostic summary remains in
+`GET /v1/sessions/recent`; raw audio is never retained.
 
 The camera endpoint follows the official StackChan multipart contract:
 
