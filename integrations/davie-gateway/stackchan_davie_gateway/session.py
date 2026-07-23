@@ -130,6 +130,11 @@ class StackChanSession:
         self._mcp_request_id = 0
         self._mcp_pending: dict[int, str] = {}
         self._mcp_waiters: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._reader_checkpoint_task: asyncio.Task | None = None
+        self._pending_reader_checkpoint: dict[str, Any] | None = None
+        self.reader_checkpoint_mirror_count = 0
+        self.reader_checkpoint_failure_count = 0
+        self.last_reader_checkpoint_error = ""
         self.connected_at = time.time()
         self.state = "connecting"
         self.state_changed_at = self.connected_at
@@ -1004,6 +1009,7 @@ class StackChanSession:
             return True
         if action.kind == "reader_pause":
             changed = self.reader.pause()
+            self._schedule_reader_checkpoint()
             text = "朗读已暂停。" if action.chinese else "Reading is paused."
             if not changed and not self.reader.segments:
                 text = "还没有加载阅读内容。" if action.chinese else "No reading is loaded yet."
@@ -1024,10 +1030,12 @@ class StackChanSession:
                     turn_started_monotonic=turn_started_monotonic,
                 )
                 return True
+            self._schedule_reader_checkpoint()
             await self._run_reader(generation)
             return True
         if action.kind == "reader_stop":
             changed = self.reader.stop()
+            self._schedule_reader_checkpoint()
             text = "朗读已停止，下次会从开头开始。" if action.chinese else "Reading stopped. It will restart from the beginning."
             if not changed:
                 text = "还没有加载阅读内容。" if action.chinese else "No reading is loaded yet."
@@ -1048,6 +1056,87 @@ class StackChanSession:
                 text = f"We are reading {status['title']}, at about {status['progress_percent']} percent."
             await self._speak(
                 text,
+                generation,
+                timing=timing,
+                turn_started_monotonic=turn_started_monotonic,
+            )
+            return True
+        if action.kind == "storage_note_save":
+            text = str(action.arguments.get("text") or "").strip()
+            if len(text.encode("utf-8")) > 480:
+                reply = (
+                    "这条笔记太长了，请缩短到大约两三句话。"
+                    if action.chinese
+                    else "That note is too long. Please keep it to two or three short sentences."
+                )
+                await self._speak(
+                    reply,
+                    generation,
+                    timing=timing,
+                    turn_started_monotonic=turn_started_monotonic,
+                )
+                return True
+            payload = await self._call_storage_json(
+                "self.storage.notes.save",
+                {"text": text},
+            )
+            if payload.get("ok") is True:
+                reply = "已经记在 TF 卡里了。" if action.chinese else "I saved that on the TF card."
+            else:
+                reply = (
+                    "TF 卡笔记现在不可用，但我们的对话仍可继续。"
+                    if action.chinese
+                    else "TF card notes are unavailable, but our conversation can continue."
+                )
+            await self._speak(
+                reply,
+                generation,
+                timing=timing,
+                turn_started_monotonic=turn_started_monotonic,
+            )
+            return True
+        if action.kind == "storage_notes_recent":
+            payload = await self._call_storage_json(
+                "self.storage.notes.recent",
+                {"limit": int(action.arguments.get("limit") or 3)},
+            )
+            notes = payload.get("notes")
+            note_texts = [
+                str(item.get("text") or "").strip()[:160]
+                for item in notes
+                if isinstance(item, dict) and str(item.get("text") or "").strip()
+            ] if isinstance(notes, list) else []
+            if not note_texts:
+                reply = "TF 卡里还没有笔记。" if action.chinese else "There are no notes on the TF card yet."
+            elif action.chinese:
+                reply = "最近的笔记是：" + "；".join(note_texts) + "。"
+            else:
+                reply = "Your latest notes are: " + "; ".join(note_texts) + "."
+            await self._speak(
+                reply,
+                generation,
+                timing=timing,
+                turn_started_monotonic=turn_started_monotonic,
+            )
+            return True
+        if action.kind == "storage_status":
+            payload = await self._call_storage_json("self.storage.get_status", {})
+            if payload.get("mounted") is True and payload.get("writable") is True:
+                free_gib = round(float(payload.get("free_bytes") or 0) / (1024**3), 1)
+                count = int(payload.get("note_count") or 0)
+                reply = (
+                    f"TF 卡工作正常，剩余约 {free_gib} GB，保存了 {count} 条笔记。"
+                    if action.chinese
+                    else f"The TF card is ready, with about {free_gib} gigabytes free and {count} saved notes."
+                )
+            else:
+                reply = (
+                    "TF 卡目前不可用，但对话、视觉和朗读服务仍可继续。"
+                    if action.chinese
+                    else "The TF card is unavailable, but conversation, vision, and reading still work."
+                )
+            await self._speak(
+                reply,
                 generation,
                 timing=timing,
                 turn_started_monotonic=turn_started_monotonic,
@@ -1112,7 +1201,9 @@ class StackChanSession:
             if generation != self.generation_id or self.reader.state != "playing":
                 return
             self.reader.advance()
+            self._schedule_reader_checkpoint()
         if generation == self.generation_id and self.reader.state == "completed":
+            self._schedule_reader_checkpoint()
             await self.transport.send_json(
                 {
                     "session_id": self.session_id,
@@ -1147,6 +1238,73 @@ class StackChanSession:
         if speak:
             await self.say(text)
         return text
+
+    async def _call_storage_json(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        if tool_name not in self.mcp_tools:
+            return {"ok": False, "error": "storage_tool_unavailable"}
+        try:
+            result = await self.call_tool(tool_name, arguments, timeout=4.0)
+        except (ProtocolError, TimeoutError):
+            LOGGER.warning("StackChan storage tool failed: %s", tool_name, exc_info=True)
+            return {"ok": False, "error": "storage_tool_failed"}
+        return self._extract_tool_json(result)
+
+    @staticmethod
+    def _extract_tool_json(result: dict[str, Any]) -> dict[str, Any]:
+        content = result.get("content")
+        if not isinstance(content, list):
+            return {}
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                continue
+            value = str(item.get("text") or "").strip()
+            if not value:
+                continue
+            try:
+                payload = json.loads(value)
+            except json.JSONDecodeError:
+                return {}
+            return payload if isinstance(payload, dict) else {}
+        return {}
+
+    def _schedule_reader_checkpoint(self) -> None:
+        if (
+            self.closed
+            or not self.reader.segments
+            or "self.storage.reader.set_checkpoint" not in self.mcp_tools
+        ):
+            return
+        status = self.reader.status()
+        self._pending_reader_checkpoint = {
+            "title": str(status["title"])[:192],
+            "index": int(status["segment_index"]),
+            "total": int(status["segment_count"]),
+            "state": str(status["state"])[:32],
+        }
+        if self._reader_checkpoint_task is None or self._reader_checkpoint_task.done():
+            self._reader_checkpoint_task = asyncio.create_task(self._flush_reader_checkpoint())
+
+    async def _flush_reader_checkpoint(self) -> None:
+        await asyncio.sleep(0.05)
+        while self._pending_reader_checkpoint is not None and not self.closed:
+            checkpoint = self._pending_reader_checkpoint
+            self._pending_reader_checkpoint = None
+            payload = await self._call_storage_json(
+                "self.storage.reader.set_checkpoint",
+                checkpoint,
+            )
+            if payload.get("ok") is True:
+                self.reader_checkpoint_mirror_count += 1
+                self.last_reader_checkpoint_error = ""
+            else:
+                self.reader_checkpoint_failure_count += 1
+                self.last_reader_checkpoint_error = str(
+                    payload.get("error") or "checkpoint_write_failed"
+                )
 
     @staticmethod
     def _extract_tool_text(result: dict[str, Any]) -> str:
@@ -1311,6 +1469,7 @@ class StackChanSession:
                     {"session_id": self.session_id, "type": "tts", "state": "stop", "reason": "reader_load"}
                 )
             self.reader.load(title, text)
+            self._schedule_reader_checkpoint()
             if autoplay:
                 self._start_reader_locked()
             return self.reader.status()
@@ -1331,6 +1490,7 @@ class StackChanSession:
                 )
             if not self.reader.resume():
                 raise ProtocolError("no resumable reading is loaded")
+            self._schedule_reader_checkpoint()
             self._start_reader_locked(already_resumed=True)
             return self.reader.status()
 
@@ -1348,6 +1508,7 @@ class StackChanSession:
             self._ensure_open()
             was_playing = self.reader.state == "playing"
             self.reader.pause()
+            self._schedule_reader_checkpoint()
             if was_playing:
                 self.generation_id += 1
                 self.speaking = False
@@ -1363,6 +1524,7 @@ class StackChanSession:
             self._ensure_open()
             had_response = self.speaking or self._response_in_flight()
             self.reader.stop()
+            self._schedule_reader_checkpoint()
             if had_response:
                 self.generation_id += 1
                 self.speaking = False
@@ -1452,6 +1614,7 @@ class StackChanSession:
 
     async def close(self, *, close_transport: bool = False, reason: str = "connection_closed") -> None:
         inactivity_task: asyncio.Task | None = None
+        checkpoint_task: asyncio.Task | None = None
         async with self.response_lock:
             if self.closed:
                 return
@@ -1476,9 +1639,18 @@ class StackChanSession:
             self._inactivity_task = None
             if inactivity_task and inactivity_task is not asyncio.current_task():
                 inactivity_task.cancel()
+            checkpoint_task = self._reader_checkpoint_task
+            self._reader_checkpoint_task = None
+            if checkpoint_task and checkpoint_task is not asyncio.current_task():
+                checkpoint_task.cancel()
         if inactivity_task and inactivity_task is not asyncio.current_task():
             try:
                 await inactivity_task
+            except asyncio.CancelledError:
+                pass
+        if checkpoint_task and checkpoint_task is not asyncio.current_task():
+            try:
+                await checkpoint_task
             except asyncio.CancelledError:
                 pass
         if close_transport:
@@ -1534,4 +1706,10 @@ class StackChanSession:
             "mcp_tools": sorted(self.mcp_tools),
             "endpoint": self.endpoint.snapshot(),
             "reader": self.reader.status(),
+            "reader_checkpoint": {
+                "mirror_count": self.reader_checkpoint_mirror_count,
+                "failure_count": self.reader_checkpoint_failure_count,
+                "last_error": self.last_reader_checkpoint_error,
+                "pending": self._pending_reader_checkpoint is not None,
+            },
         }

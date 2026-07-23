@@ -639,6 +639,70 @@ public:
         return ESP_ERR_NOT_SUPPORTED;
 #endif
     }
+
+    std::string SaveStorageNote(const std::string& text)
+    {
+#ifdef CONFIG_STACKCHAN_DAVIE_TF_STORAGE
+        return storage_ != nullptr ? storage_->SaveNote(text)
+                                   : R"({"ok":false,"error":"storage_not_initialized"})";
+#else
+        return R"({"ok":false,"error":"storage_disabled"})";
+#endif
+    }
+
+    std::string GetRecentStorageNotes(int limit) const
+    {
+#ifdef CONFIG_STACKCHAN_DAVIE_TF_STORAGE
+        return storage_ != nullptr ? storage_->RecentNotesJson(limit)
+                                   : R"({"ok":false,"error":"storage_not_initialized","notes":[]})";
+#else
+        return R"({"ok":false,"error":"storage_disabled","notes":[]})";
+#endif
+    }
+
+    std::string SaveReaderCheckpoint(const std::string& title, int index, int total,
+                                     const std::string& state)
+    {
+#ifdef CONFIG_STACKCHAN_DAVIE_TF_STORAGE
+        return storage_ != nullptr
+                   ? storage_->SaveReaderCheckpoint(title, index, total, state)
+                   : R"({"ok":false,"error":"storage_not_initialized"})";
+#else
+        return R"({"ok":false,"error":"storage_disabled"})";
+#endif
+    }
+
+    std::string GetReaderCheckpoint() const
+    {
+#ifdef CONFIG_STACKCHAN_DAVIE_TF_STORAGE
+        return storage_ != nullptr ? storage_->ReaderCheckpointJson()
+                                   : R"({"ok":false,"error":"storage_not_initialized"})";
+#else
+        return R"({"ok":false,"error":"storage_disabled"})";
+#endif
+    }
+
+    std::string AppendStorageDiagnostic(const std::string& event, const std::string& detail)
+    {
+#ifdef CONFIG_STACKCHAN_DAVIE_TF_STORAGE
+        return storage_ != nullptr
+                   ? storage_->AppendDiagnostic(event, detail)
+                   : R"({"ok":false,"error":"storage_not_initialized"})";
+#else
+        return R"({"ok":false,"error":"storage_disabled"})";
+#endif
+    }
+
+    std::string GetRecentStorageDiagnostics(int limit) const
+    {
+#ifdef CONFIG_STACKCHAN_DAVIE_TF_STORAGE
+        return storage_ != nullptr
+                   ? storage_->RecentDiagnosticsJson(limit)
+                   : R"({"ok":false,"error":"storage_not_initialized","events":[]})";
+#else
+        return R"({"ok":false,"error":"storage_disabled","events":[]})";
+#endif
+    }
 };
 
 DECLARE_BOARD(M5StackCoreS3Board);
@@ -659,6 +723,44 @@ esp_err_t hal_bridge::board_run_storage_self_test()
 {
     auto& board = static_cast<M5StackCoreS3Board&>(Board::GetInstance());
     return board.RunStorageSelfTest();
+}
+
+std::string hal_bridge::board_save_storage_note(const std::string& text)
+{
+    auto& board = static_cast<M5StackCoreS3Board&>(Board::GetInstance());
+    return board.SaveStorageNote(text);
+}
+
+std::string hal_bridge::board_get_recent_storage_notes(int limit)
+{
+    auto& board = static_cast<M5StackCoreS3Board&>(Board::GetInstance());
+    return board.GetRecentStorageNotes(limit);
+}
+
+std::string hal_bridge::board_save_reader_checkpoint(const std::string& title, int index, int total,
+                                                     const std::string& state)
+{
+    auto& board = static_cast<M5StackCoreS3Board&>(Board::GetInstance());
+    return board.SaveReaderCheckpoint(title, index, total, state);
+}
+
+std::string hal_bridge::board_get_reader_checkpoint()
+{
+    auto& board = static_cast<M5StackCoreS3Board&>(Board::GetInstance());
+    return board.GetReaderCheckpoint();
+}
+
+std::string hal_bridge::board_append_storage_diagnostic(const std::string& event,
+                                                        const std::string& detail)
+{
+    auto& board = static_cast<M5StackCoreS3Board&>(Board::GetInstance());
+    return board.AppendStorageDiagnostic(event, detail);
+}
+
+std::string hal_bridge::board_get_recent_storage_diagnostics(int limit)
+{
+    auto& board = static_cast<M5StackCoreS3Board&>(Board::GetInstance());
+    return board.GetRecentStorageDiagnostics(limit);
 }
 
 StackChanCamera* hal_bridge::board_get_camera()

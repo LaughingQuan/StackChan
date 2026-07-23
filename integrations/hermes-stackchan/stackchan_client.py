@@ -586,6 +586,63 @@ class StackChanClient:
             "lifecycle": "device_local_while_powered",
         }
 
+    def storage(
+        self,
+        action: str,
+        *,
+        text: str = "",
+        limit: Any = 3,
+    ) -> dict[str, Any]:
+        normalized = action.strip().lower()
+        if normalized == "status":
+            tool_name = "self.storage.get_status"
+            arguments: dict[str, Any] = {}
+        elif normalized == "self_test":
+            tool_name = "self.storage.self_test"
+            arguments = {}
+        elif normalized == "save_note":
+            note = text.strip()
+            if not note:
+                raise StackChanError("storage_note_required", "A short note is required")
+            if len(note.encode("utf-8")) > 480:
+                raise StackChanError(
+                    "storage_note_too_long",
+                    "TF edge notes are limited to 480 UTF-8 bytes",
+                )
+            tool_name = "self.storage.notes.save"
+            arguments = {"text": note}
+        elif normalized == "recent_notes":
+            tool_name = "self.storage.notes.recent"
+            arguments = {
+                "limit": self._integer(limit, name="limit", minimum=1, maximum=10)
+            }
+        elif normalized == "reader_checkpoint":
+            tool_name = "self.storage.reader.get_checkpoint"
+            arguments = {}
+        elif normalized == "diagnostics":
+            tool_name = "self.storage.diagnostics.recent"
+            arguments = {
+                "limit": self._integer(limit, name="limit", minimum=1, maximum=10)
+            }
+        else:
+            raise StackChanError(
+                "storage_action_invalid",
+                "StackChan storage supports status, self_test, save_note, recent_notes, "
+                "reader_checkpoint, or diagnostics",
+            )
+
+        device_id = self.resolve_device_id()
+        payload = self._call_tool(device_id, tool_name, arguments)
+        result = self._mcp_value(payload.get("result"))
+        return {
+            "ok": payload.get("status") == "ok"
+            and (not isinstance(result, dict) or result.get("ok") is not False),
+            "status": payload.get("status"),
+            "device": "configured_or_only_connected",
+            "action": normalized,
+            "result": result,
+        }
+
     def status(self, *, include_capabilities: bool = True) -> dict[str, Any]:
         health = self.health()
         gateway_reachable = health.get("status") == "ok"

@@ -158,6 +158,44 @@ REMINDER_SCHEMA = {
     },
 }
 
+STORAGE_SCHEMA = {
+    "name": "stackchan_storage",
+    "description": (
+        "Use Davie's optional StackChan TF edge memory. This tool can check card health, run a "
+        "tiny non-destructive self-test, save or read short local notes, read the mirrored book "
+        "checkpoint, or inspect bounded device diagnostics. Use save_note when the user explicitly "
+        "asks the desktop robot to remember a short item locally. This is not Knowledge Atlas and "
+        "must not store credentials, raw audio, or long documents. The robot must be awake."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": [
+                    "status",
+                    "self_test",
+                    "save_note",
+                    "recent_notes",
+                    "reader_checkpoint",
+                    "diagnostics",
+                ],
+            },
+            "text": {
+                "type": "string",
+                "description": "Short plain-text note for save_note, at most 480 UTF-8 bytes.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "description": "Number of recent notes or diagnostics. Defaults to 3.",
+            },
+        },
+        "required": ["action"],
+    },
+}
+
 
 def _config() -> StackChanConfig:
     return StackChanConfig.load()
@@ -227,6 +265,14 @@ def _handle_reminder(args: dict[str, Any], **_kwargs: Any) -> str:
         reminder_id=args.get("reminder_id"),
     )
 
+def _handle_storage(args: dict[str, Any], **_kwargs: Any) -> str:
+    return json_result(
+        StackChanClient(_config()).storage,
+        str(args.get("action") or ""),
+        text=str(args.get("text") or ""),
+        limit=args.get("limit", 3),
+    )
+
 
 def _command_status(_raw_args: str = "") -> str:
     try:
@@ -244,6 +290,7 @@ def register(ctx: Any) -> None:
         (READER_SCHEMA, _handle_reader, "📖"),
         (CONTROL_SCHEMA, _handle_control, "🎛"),
         (REMINDER_SCHEMA, _handle_reminder, "⏰"),
+        (STORAGE_SCHEMA, _handle_storage, "💾"),
     ):
         ctx.register_tool(
             name=schema["name"],

@@ -1,6 +1,6 @@
 # Davie StackChan Hermes Plugin
 
-`jm-stackchan` gives Davie six explicit local tools without changing Hermes core:
+`jm-stackchan` gives Davie seven explicit local tools without changing Hermes core:
 
 - `stackchan_status`
 - `stackchan_say`
@@ -8,6 +8,7 @@
 - `stackchan_reader`
 - `stackchan_control`
 - `stackchan_reminder`
+- `stackchan_storage`
 
 The plugin calls the authenticated StackChan gateway. It never embeds a token in source or
 `config.yaml`; configuration only points to a local mode-`0600` token file.

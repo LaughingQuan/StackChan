@@ -62,6 +62,13 @@ void set_xiaozhi_config(const XiaozhiConfig_t& config);
 i2c_master_bus_handle_t board_get_i2c_bus();
 std::string board_get_storage_status_json();
 esp_err_t board_run_storage_self_test();
+std::string board_save_storage_note(const std::string& text);
+std::string board_get_recent_storage_notes(int limit);
+std::string board_save_reader_checkpoint(const std::string& title, int index, int total,
+                                         const std::string& state);
+std::string board_get_reader_checkpoint();
+std::string board_append_storage_diagnostic(const std::string& event, const std::string& detail);
+std::string board_get_recent_storage_diagnostics(int limit);
 StackChanCamera* board_get_camera();
 int board_get_battery_level();
 bool board_is_battery_charging();

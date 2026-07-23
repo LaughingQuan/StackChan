@@ -153,6 +153,86 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                 result = {"content": [{"type": "text", "text": '[{"id":7,"message":"Stretch"}]'}]}
             elif tool == "self.robot.stop_reminder":
                 result = {"content": [{"type": "text", "text": "true"}]}
+            elif tool in {"self.storage.get_status", "self.storage.self_test"}:
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "ok": True,
+                                    "mounted": True,
+                                    "writable": True,
+                                    "free_bytes": 15 * 1024**3,
+                                    "note_count": 1,
+                                }
+                            ),
+                        }
+                    ]
+                }
+            elif tool == "self.storage.notes.save":
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "ok": True,
+                                    "saved": True,
+                                    "text": body["arguments"]["text"],
+                                    "note_count": 1,
+                                }
+                            ),
+                        }
+                    ]
+                }
+            elif tool == "self.storage.notes.recent":
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "ok": True,
+                                    "notes": [{"text": "Call the bank on Friday"}],
+                                    "note_count": 1,
+                                }
+                            ),
+                        }
+                    ]
+                }
+            elif tool == "self.storage.reader.get_checkpoint":
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "ok": True,
+                                    "title": "A short story",
+                                    "index": 2,
+                                    "total": 10,
+                                    "state": "paused",
+                                }
+                            ),
+                        }
+                    ]
+                }
+            elif tool == "self.storage.diagnostics.recent":
+                result = {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "ok": True,
+                                    "events": [{"event": "boot: storage_ready"}],
+                                    "event_count": 1,
+                                }
+                            ),
+                        }
+                    ]
+                }
             else:
                 result = True
             self._json(
@@ -487,6 +567,65 @@ def test_reminder_rejects_invalid_input_before_network(gateway, kwargs):
     assert _GatewayHandler.requests == before
 
 
+def test_storage_tool_covers_health_notes_checkpoint_and_diagnostics(gateway):
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+
+    status = client.storage("status")
+    saved = client.storage("save_note", text="Call the bank on Friday")
+    notes = client.storage("recent_notes", limit=3)
+    checkpoint = client.storage("reader_checkpoint")
+    diagnostics = client.storage("diagnostics", limit=5)
+
+    assert status["result"]["mounted"] is True
+    assert saved["result"]["text"] == "Call the bank on Friday"
+    assert notes["result"]["notes"][0]["text"] == "Call the bank on Friday"
+    assert checkpoint["result"]["index"] == 2
+    assert diagnostics["result"]["events"][0]["event"] == "boot: storage_ready"
+    assert _GatewayHandler.requests[-5:] == [
+        (
+            "/v1/devices/stackchan-main/tools/self.storage.get_status",
+            {"arguments": {}},
+        ),
+        (
+            "/v1/devices/stackchan-main/tools/self.storage.notes.save",
+            {"arguments": {"text": "Call the bank on Friday"}},
+        ),
+        (
+            "/v1/devices/stackchan-main/tools/self.storage.notes.recent",
+            {"arguments": {"limit": 3}},
+        ),
+        (
+            "/v1/devices/stackchan-main/tools/self.storage.reader.get_checkpoint",
+            {"arguments": {}},
+        ),
+        (
+            "/v1/devices/stackchan-main/tools/self.storage.diagnostics.recent",
+            {"arguments": {"limit": 5}},
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"action": "save_note", "text": ""},
+        {"action": "save_note", "text": "x" * 481},
+        {"action": "recent_notes", "limit": 0},
+        {"action": "diagnostics", "limit": 11},
+        {"action": "erase"},
+    ],
+)
+def test_storage_rejects_unbounded_or_destructive_actions(gateway, kwargs):
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+    before = list(_GatewayHandler.requests)
+
+    result = json.loads(client_module.json_result(client.storage, **kwargs))
+
+    assert result["ok"] is False
+    assert result["error"].startswith(("storage_", "control_"))
+    assert _GatewayHandler.requests == before
+
+
 def test_plugin_registers_status_speech_and_vision_tools():
     calls = []
 
@@ -500,7 +639,15 @@ def test_plugin_registers_status_speech_and_vision_tools():
     plugin_module.register(Context())
 
     tools = {item[1]["name"]: item[1] for item in calls if item[0] == "tool"}
-    assert set(tools) == {"stackchan_status", "stackchan_say", "stackchan_vision", "stackchan_reader", "stackchan_control", "stackchan_reminder"}
+    assert set(tools) == {
+        "stackchan_status",
+        "stackchan_say",
+        "stackchan_vision",
+        "stackchan_reader",
+        "stackchan_control",
+        "stackchan_reminder",
+        "stackchan_storage",
+    }
     assert all(tool["toolset"] == "stackchan" for tool in tools.values())
     assert tools["stackchan_status"]["handler"] is plugin_module._handle_status
     assert "MANDATORY live-state check" in tools["stackchan_status"]["description"]
@@ -509,3 +656,4 @@ def test_plugin_registers_status_speech_and_vision_tools():
     assert tools["stackchan_reader"]["handler"] is plugin_module._handle_reader
     assert tools["stackchan_control"]["handler"] is plugin_module._handle_control
     assert tools["stackchan_reminder"]["handler"] is plugin_module._handle_reminder
+    assert tools["stackchan_storage"]["handler"] is plugin_module._handle_storage

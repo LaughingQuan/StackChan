@@ -22,6 +22,14 @@ CAPABILITIES: tuple[dict[str, str], ...] = (
         "description": "Read a loaded book or article, then pause, continue, or stop by voice.",
     },
     {
+        "id": "edge_memory",
+        "label": "TF edge memory",
+        "description": (
+            "Save and read short local notes, preserve a reading checkpoint, and inspect bounded "
+            "device diagnostics when an optional TF card is available."
+        ),
+    },
+    {
         "id": "reminder",
         "label": "Set a reminder",
         "description": "Create a short local reminder on StackChan.",
@@ -83,6 +91,25 @@ _SESSION_SLEEP = re.compile(
     r"(?:davie[，, ]*)?(?:再见|休息吧|去休息|停止监听|关闭语音|结束对话))",
     re.IGNORECASE,
 )
+_NOTE_SAVE_EN = re.compile(
+    r"^(?:davie[,\s]+)?(?:please\s+)?(?:remember(?: this)?|save (?:this )?(?:as a )?note|"
+    r"write this down|note this)[: ,.-]+(.+)$",
+    re.IGNORECASE,
+)
+_NOTE_SAVE_ZH = re.compile(
+    r"^(?:davie[，,\s]*)?(?:请)?(?:记一下|记录一下|记住|把这个记下来)[：:，,\s]*(.+)$",
+    re.IGNORECASE,
+)
+_NOTE_LIST = re.compile(
+    r"^(?:davie[,\s]+)?(?:read|show|tell me)(?: me)? (?:my |the )?(?:saved )?notes|"
+    r"^(?:davie[，,\s]*)?(?:读|查看|告诉我)(?:一下)?(?:我的|卡里|TF卡里)?(?:笔记|记录)",
+    re.IGNORECASE,
+)
+_STORAGE_STATUS = re.compile(
+    r"^(?:davie[,\s]+)?(?:check |show )?(?:the )?(?:tf card|storage card|edge storage) status|"
+    r"^(?:davie[，,\s]*)?(?:检查|查看)?(?:一下)?(?:TF卡|存储卡|边缘存储)(?:的)?(?:状态|情况)",
+    re.IGNORECASE,
+)
 _REMINDER_EN = re.compile(
     r"\bremind me in\s+(\d{1,5})\s*(seconds?|minutes?|hours?)\s+(?:to\s+)?(.+)",
     re.IGNORECASE,
@@ -131,6 +158,9 @@ def capability_manifest() -> dict[str, Any]:
             "Davie, what do you see?",
             "Davie, continue reading.",
             "Davie, pause reading.",
+            "Davie, remember this: call the bank on Friday.",
+            "Davie, read my saved notes.",
+            "Davie, check the TF card status.",
             "Davie, go to sleep.",
             "Davie, remind me in ten minutes to take a break.",
             "Davie, set the volume to 45.",
@@ -142,11 +172,13 @@ def capability_reply(*, chinese: bool) -> str:
     if chinese:
         return (
             "我可以和你对话、用摄像头看并解释、朗读文章或书籍并暂停继续，"
-            "也可以设置提醒、调整音量和控制头部或灯光。你可以直接说，Davie，帮我看看这个。"
+            "也可以在 TF 卡里保存短笔记和阅读断点、设置提醒、调整音量和控制头部或灯光。"
+            "你可以直接说，Davie，记一下，周五给银行回复。"
         )
     return (
         "I can talk with you, look and explain with my camera, read a book with pause and resume, "
-        "set reminders, and control my volume, head, or light. Try saying, Davie, what do you see?"
+        "save short notes and reading progress on the TF card, set reminders, and control my volume, "
+        "head, or light. Try saying, Davie, remember this: call the bank on Friday."
     )
 
 
@@ -168,6 +200,17 @@ def parse_device_action(text: str) -> DeviceAction | None:
         return DeviceAction("reader_status", chinese=chinese)
     if _SESSION_SLEEP.search(normalized):
         return DeviceAction("session_sleep", chinese=chinese)
+    if _NOTE_LIST.search(normalized):
+        return DeviceAction("storage_notes_recent", {"limit": 3}, chinese=chinese)
+    if _STORAGE_STATUS.search(normalized):
+        return DeviceAction("storage_status", chinese=chinese)
+
+    match = _NOTE_SAVE_EN.search(normalized)
+    if match:
+        return DeviceAction("storage_note_save", {"text": match.group(1).strip()}, chinese=False)
+    match = _NOTE_SAVE_ZH.search(normalized)
+    if match:
+        return DeviceAction("storage_note_save", {"text": match.group(1).strip()}, chinese=True)
 
     match = _REMINDER_EN.search(normalized)
     if match:

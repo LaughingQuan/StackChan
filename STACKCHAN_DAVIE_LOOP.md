@@ -271,3 +271,11 @@ handoff:
 - 花费: ¥0；没有调用付费或云端模型/API。
 - 边界: 未格式化 TF、未存储凭据或原始麦克风音频、未修改 Davie executor/proactivity；启动日志与网络可达不冒充真人唤醒或人耳播放证据。
 - 后续: 在 TF 抽象上增加小型本地笔记、伴读断点与有界诊断日志，并通过 Gateway/Davie 工具暴露；所有操作保持非首音频关键路径。
+
+### 【完成】Codex 2026-07-24 04:29 Asia/Singapore — P2 bounded TF edge memory
+- 发现: TF 卡适合保存短笔记、伴读断点和有限诊断，不适合作为原始音频或整本资料的第二主存储。首次真机启动还发现 FAT 8.3 文件名会拒绝 `events.log.tmp`，这是模拟测试无法发现的真实介质兼容问题。
+- 修复: 增加最多 32 条短笔记、单一伴读断点、最多 48 条诊断事件及滚动容量上限；所有写入使用 flush/fsync/rename，失败仅降级 TF 功能。Gateway 增加无需 LLM 的确定性“保存/读取笔记、检查 TF”路由和异步合并断点镜像；Hermes 独立插件增加严格白名单 `stackchan_storage`。原子临时文件改为 FAT 兼容的 `notes.tmp`、`reader.tmp`、`events.tmp`。
+- 验证: Gateway `62 passed`；Hermes 插件 `34 passed`；两套 Ruff 门禁和 `git diff --check` 通过；firmware host test 1/1；ESP-IDF 完整构建通过，app `0x444120`、14% free；分区表与刷写前 3 KiB 备份 `cmp` exit 0；app-flash 哈希校验通过。真机启动诊断从首次的临时文件写失败修复为无告警，`14895 MiB`、writable=1，8 个 storage MCP 工具全部注册，LCD/camera/touch/audio/Wi-Fi/wake model 正常。合成 Mac 唤醒未建立会话，因此没有把它冒充 MCP 或真人声学通过；MCP 请求/响应及边界由 Gateway/插件测试覆盖。
+- 花费: ¥0；没有调用付费或云端模型/API。
+- 边界: 未格式化 TF；未写凭据、原始音频或长文档；未修改 Davie executor/proactivity；启动与合成 canary 不替代真人唤醒/听声。
+- 后续: 增加明确的屏幕交互提示与物理触控兜底说明，减少“唤醒失败时不知道下一步”的挫败；部署 Gateway/插件后用真人会话补做真实 MCP 读写。

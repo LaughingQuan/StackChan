@@ -43,6 +43,70 @@ void Hal::xiaozhi_mcp_init()
             return hal_bridge::board_get_storage_status_json();
         });
 
+    mclog::tagInfo(_tag, "add storage.notes.save tool");
+    mcp_server.AddTool(
+        "self.storage.notes.save",
+        "Save one short plain-text note in the optional TF edge vault. The note is bounded, "
+        "stored without audio, and the oldest note is rotated when the local limit is reached.",
+        PropertyList({Property("text", kPropertyTypeString, std::string(""))}),
+        [](const PropertyList& properties) -> ReturnValue {
+            return hal_bridge::board_save_storage_note(properties["text"].value<std::string>());
+        });
+
+    mclog::tagInfo(_tag, "add storage.notes.recent tool");
+    mcp_server.AddTool(
+        "self.storage.notes.recent",
+        "Return up to ten recent TF edge-vault notes, newest first.",
+        PropertyList({Property("limit", kPropertyTypeInteger, 3, 1, 10)}),
+        [](const PropertyList& properties) -> ReturnValue {
+            return hal_bridge::board_get_recent_storage_notes(properties["limit"].value<int>());
+        });
+
+    mclog::tagInfo(_tag, "add storage.reader.set_checkpoint tool");
+    mcp_server.AddTool(
+        "self.storage.reader.set_checkpoint",
+        "Mirror a small reading checkpoint to TF. This stores only title and segment position, "
+        "not the whole book or generated audio.",
+        PropertyList({Property("title", kPropertyTypeString, std::string("")),
+                      Property("index", kPropertyTypeInteger, 0, 0, 1000000),
+                      Property("total", kPropertyTypeInteger, 0, 0, 1000000),
+                      Property("state", kPropertyTypeString, std::string("paused"))}),
+        [](const PropertyList& properties) -> ReturnValue {
+            return hal_bridge::board_save_reader_checkpoint(
+                properties["title"].value<std::string>(), properties["index"].value<int>(),
+                properties["total"].value<int>(), properties["state"].value<std::string>());
+        });
+
+    mclog::tagInfo(_tag, "add storage.reader.get_checkpoint tool");
+    mcp_server.AddTool(
+        "self.storage.reader.get_checkpoint",
+        "Return the last small reading checkpoint mirrored to TF.",
+        std::vector<Property>{}, [](const PropertyList& properties) -> ReturnValue {
+            return hal_bridge::board_get_reader_checkpoint();
+        });
+
+    mclog::tagInfo(_tag, "add storage.diagnostics.append tool");
+    mcp_server.AddTool(
+        "self.storage.diagnostics.append",
+        "Append one bounded, non-audio device diagnostic event to TF.",
+        PropertyList({Property("event", kPropertyTypeString, std::string("")),
+                      Property("detail", kPropertyTypeString, std::string(""))}),
+        [](const PropertyList& properties) -> ReturnValue {
+            return hal_bridge::board_append_storage_diagnostic(
+                properties["event"].value<std::string>(),
+                properties["detail"].value<std::string>());
+        });
+
+    mclog::tagInfo(_tag, "add storage.diagnostics.recent tool");
+    mcp_server.AddTool(
+        "self.storage.diagnostics.recent",
+        "Return up to ten recent bounded TF diagnostic events, newest first.",
+        PropertyList({Property("limit", kPropertyTypeInteger, 5, 1, 10)}),
+        [](const PropertyList& properties) -> ReturnValue {
+            return hal_bridge::board_get_recent_storage_diagnostics(
+                properties["limit"].value<int>());
+        });
+
     // System Prompt：
     // You can control the robot's head. Use get_yaw and get_pitch to sense current position. Use set_yaw for horizontal
     // movement and set_pitch for vertical movement. All angles are in degrees.

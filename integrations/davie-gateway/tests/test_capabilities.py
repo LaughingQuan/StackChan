@@ -24,6 +24,7 @@ def test_capability_manifest_is_voice_first_and_names_wake_word() -> None:
     assert {item["id"] for item in manifest["capabilities"]} >= {
         "vision",
         "reader",
+        "edge_memory",
         "reminder",
         "session_control",
     }
@@ -38,6 +39,13 @@ def test_parse_reader_and_device_actions_in_both_languages() -> None:
     assert parse_device_action("set the LED to blue").arguments == {"color": "blue"}
     assert parse_device_action("Davie, go to sleep.").kind == "session_sleep"
     assert parse_device_action("休息吧").kind == "session_sleep"
+    saved = parse_device_action("Davie, remember this: call the bank on Friday")
+    assert saved is not None
+    assert saved.kind == "storage_note_save"
+    assert saved.arguments == {"text": "call the bank on Friday"}
+    assert parse_device_action("记一下，周五给母行回复").kind == "storage_note_save"
+    assert parse_device_action("Davie, read my saved notes").kind == "storage_notes_recent"
+    assert parse_device_action("查看TF卡状态").kind == "storage_status"
 
 
 def test_parse_reminder_converts_units_and_rejects_out_of_range() -> None:
@@ -59,3 +67,4 @@ def test_general_conversation_is_not_misclassified_as_device_control() -> None:
     assert parse_device_action("I stopped reading that book last year.") is None
     assert parse_device_action("Look at this photo and explain it.") is None
     assert parse_device_action("What do you think about blue light?") is None
+    assert parse_device_action("Do you remember our last conversation?") is None

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <mutex>
 #include <string>
+#include <vector>
 
 class DavieTfStorage {
 public:
@@ -17,10 +18,23 @@ public:
 
     bool mounted() const;
     std::string StatusJson() const;
+    std::string SaveNote(const std::string& text);
+    std::string RecentNotesJson(int limit) const;
+    std::string SaveReaderCheckpoint(const std::string& title, int index, int total,
+                                     const std::string& state);
+    std::string ReaderCheckpointJson() const;
+    std::string AppendDiagnostic(const std::string& event, const std::string& detail);
+    std::string RecentDiagnosticsJson(int limit) const;
 
 private:
     esp_err_t EnsureDirectoriesLocked();
     esp_err_t RunSelfTestLocked();
+    esp_err_t AppendBoundedRecordLocked(const char* path, const std::string& record,
+                                        size_t max_records, size_t max_bytes);
+    esp_err_t WriteAtomicFileLocked(const char* path, const std::string& payload);
+    std::vector<std::string> ReadRecordsLocked(const char* path, size_t max_records) const;
+    std::string ReadSmallFileLocked(const char* path, size_t max_bytes) const;
+    size_t CountRecordsLocked(const char* path, size_t max_records) const;
     void RefreshCapacityLocked();
     void SetErrorLocked(const char* operation, esp_err_t error);
 

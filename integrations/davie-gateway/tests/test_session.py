@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import struct
 
 from stackchan_davie_gateway.audio import pcm_to_wav
@@ -993,4 +994,118 @@ async def test_local_capability_reply_updates_session_diagnostics() -> None:
     assert handled is True
     assert session.last_response.startswith("I can talk with you")
     assert session.status()["last_response"] == session.last_response
+    await session.close()
+
+
+async def test_tf_note_actions_are_local_and_do_not_call_davie() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=FakeMedia(),
+        davie=NoDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    session.mcp_tools = {
+        "self.storage.notes.save": {},
+        "self.storage.notes.recent": {},
+        "self.storage.get_status": {},
+    }
+    calls: list[tuple[str, dict]] = []
+
+    async def fake_call_tool(name, arguments=None, *, timeout=15.0):
+        calls.append((name, arguments or {}))
+        if name == "self.storage.notes.save":
+            payload = {"ok": True, "saved": True, "note_count": 1}
+        elif name == "self.storage.notes.recent":
+            payload = {
+                "ok": True,
+                "notes": [{"created_at": 1, "text": "call the bank on Friday"}],
+                "note_count": 1,
+            }
+        else:
+            payload = {
+                "ok": True,
+                "mounted": True,
+                "writable": True,
+                "free_bytes": 15 * 1024**3,
+                "note_count": 1,
+            }
+        return {"content": [{"type": "text", "text": json.dumps(payload)}]}
+
+    session.call_tool = fake_call_tool
+
+    assert await session._handle_device_action(
+        DeviceAction(
+            "storage_note_save",
+            {"text": "call the bank on Friday"},
+            chinese=False,
+        ),
+        session.generation_id,
+    )
+    assert session.last_response == "I saved that on the TF card."
+    assert await session._handle_device_action(
+        DeviceAction("storage_notes_recent", {"limit": 3}, chinese=False),
+        session.generation_id,
+    )
+    assert "call the bank on Friday" in session.last_response
+    assert await session._handle_device_action(
+        DeviceAction("storage_status", chinese=False),
+        session.generation_id,
+    )
+    assert "15.0 gigabytes free" in session.last_response
+    assert [name for name, _ in calls] == [
+        "self.storage.notes.save",
+        "self.storage.notes.recent",
+        "self.storage.get_status",
+    ]
+    await session.close()
+
+
+async def test_reader_checkpoint_mirror_is_async_and_coalesced() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=FakeMedia(),
+        davie=NoDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    session.mcp_tools = {"self.storage.reader.set_checkpoint": {}}
+    calls: list[dict] = []
+
+    async def fake_call_tool(name, arguments=None, *, timeout=15.0):
+        assert name == "self.storage.reader.set_checkpoint"
+        calls.append(arguments or {})
+        return {"content": [{"type": "text", "text": '{"ok":true}'}]}
+
+    session.call_tool = fake_call_tool
+    await session.load_reader(title="A short story", text="One. Two.")
+    session.reader.pause()
+    session._schedule_reader_checkpoint()
+    await asyncio.sleep(0.1)
+
+    assert len(calls) == 1
+    assert calls[0] == {
+        "title": "A short story",
+        "index": 0,
+        "total": 2,
+        "state": "paused",
+    }
+    assert session.status()["reader_checkpoint"]["mirror_count"] == 1
+    assert session.status()["reader_checkpoint"]["failure_count"] == 0
     await session.close()

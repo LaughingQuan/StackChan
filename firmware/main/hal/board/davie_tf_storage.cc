@@ -5,12 +5,16 @@
 #include <esp_vfs_fat.h>
 
 #include <cerrno>
+#include <cstdlib>
+#include <ctime>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <algorithm>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <vector>
 
 namespace {
 
@@ -22,6 +26,16 @@ constexpr char kCacheRoot[] = "/tf/davie/cache";
 constexpr char kDiagnosticsRoot[] = "/tf/davie/diag";
 constexpr char kProbePath[] = "/tf/davie/diag/probe.tmp";
 constexpr char kProbePayload[] = "davie-tf-storage-v1\n";
+constexpr char kNotesPath[] = "/tf/davie/notes.log";
+constexpr char kReaderCheckpointPath[] = "/tf/davie/reader.chk";
+constexpr char kDiagnosticsPath[] = "/tf/davie/diag/events.log";
+constexpr size_t kMaxNoteBytes = 480;
+constexpr size_t kMaxNotes = 32;
+constexpr size_t kMaxNotesFileBytes = 24 * 1024;
+constexpr size_t kMaxDiagnosticEventBytes = 96;
+constexpr size_t kMaxDiagnosticDetailBytes = 240;
+constexpr size_t kMaxDiagnostics = 48;
+constexpr size_t kMaxDiagnosticsFileBytes = 24 * 1024;
 
 std::string JsonEscape(const std::string& value)
 {
@@ -61,6 +75,50 @@ esp_err_t EnsureDirectory(const char* path)
     }
     ESP_LOGE(kTag, "mkdir %s failed: errno=%d", path, errno);
     return ESP_FAIL;
+}
+
+std::string NormalizeSingleLine(const std::string& value, size_t max_bytes)
+{
+    std::string normalized;
+    normalized.reserve(std::min(value.size(), max_bytes));
+    bool pending_space = false;
+    for (const unsigned char c : value) {
+        if (c < 0x20 || c == 0x7f) {
+            pending_space = !normalized.empty();
+            continue;
+        }
+        if (c == ' ') {
+            pending_space = !normalized.empty();
+            continue;
+        }
+        if (pending_space && normalized.size() < max_bytes) {
+            normalized.push_back(' ');
+        }
+        pending_space = false;
+        if (normalized.size() >= max_bytes) {
+            break;
+        }
+        normalized.push_back(static_cast<char>(c));
+    }
+    while (!normalized.empty() && normalized.back() == ' ') {
+        normalized.pop_back();
+    }
+    return normalized;
+}
+
+std::string RecordText(const std::string& record)
+{
+    const size_t separator = record.find('\t');
+    return separator == std::string::npos ? record : record.substr(separator + 1);
+}
+
+long long RecordTimestamp(const std::string& record)
+{
+    const size_t separator = record.find('\t');
+    if (separator == std::string::npos) {
+        return 0;
+    }
+    return strtoll(record.substr(0, separator).c_str(), nullptr, 10);
 }
 
 }  // namespace
@@ -129,6 +187,16 @@ esp_err_t DavieTfStorage::Mount()
 
     const uint32_t total_mib = static_cast<uint32_t>(total_bytes_ / (1024 * 1024));
     const uint32_t free_mib = static_cast<uint32_t>(free_bytes_ / (1024 * 1024));
+    if (writable_) {
+        const std::string boot_record =
+            std::to_string(static_cast<long long>(time(nullptr))) + "\tboot: storage_ready";
+        const esp_err_t diagnostic_result =
+            AppendBoundedRecordLocked(kDiagnosticsPath, boot_record, kMaxDiagnostics,
+                                      kMaxDiagnosticsFileBytes);
+        if (diagnostic_result != ESP_OK) {
+            ESP_LOGW(kTag, "Unable to record bounded TF startup diagnostic");
+        }
+    }
     ESP_LOGI(kTag, "TF card ready: total=%u MiB free=%u MiB writable=%d", total_mib, free_mib,
              writable_);
     return ESP_OK;
@@ -171,15 +239,164 @@ bool DavieTfStorage::mounted() const
 std::string DavieTfStorage::StatusJson() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
-    char numeric[256];
+    const size_t note_count = mounted_ ? CountRecordsLocked(kNotesPath, kMaxNotes) : 0;
+    const size_t diagnostic_count =
+        mounted_ ? CountRecordsLocked(kDiagnosticsPath, kMaxDiagnostics) : 0;
+    struct stat checkpoint_stat = {};
+    const bool checkpoint_present =
+        mounted_ && stat(kReaderCheckpointPath, &checkpoint_stat) == 0 && checkpoint_stat.st_size > 0;
+
+    char numeric[384];
     snprintf(numeric, sizeof(numeric),
-             R"("mount_attempted":%s,"mounted":%s,"writable":%s,"self_test_passed":%s,"total_bytes":%llu,"free_bytes":%llu)",
+             R"("mount_attempted":%s,"mounted":%s,"writable":%s,"self_test_passed":%s,"total_bytes":%llu,"free_bytes":%llu,"note_count":%u,"diagnostic_count":%u,"reader_checkpoint_present":%s)",
              mount_attempted_ ? "true" : "false", mounted_ ? "true" : "false", writable_ ? "true" : "false",
              self_test_passed_ ? "true" : "false", static_cast<unsigned long long>(total_bytes_),
-             static_cast<unsigned long long>(free_bytes_));
+             static_cast<unsigned long long>(free_bytes_), static_cast<unsigned>(note_count),
+             static_cast<unsigned>(diagnostic_count), checkpoint_present ? "true" : "false");
 
     return std::string("{\"enabled\":true,\"mount_point\":\"") + kMountPoint + "\"," + numeric +
            ",\"last_error\":\"" + JsonEscape(last_error_) + "\"}";
+}
+
+std::string DavieTfStorage::SaveNote(const std::string& text)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!mounted_ || !writable_) {
+        return R"({"ok":false,"error":"storage_not_writable"})";
+    }
+    if (text.size() > kMaxNoteBytes) {
+        return R"({"ok":false,"error":"note_too_long","max_bytes":480})";
+    }
+    const std::string normalized = NormalizeSingleLine(text, kMaxNoteBytes);
+    if (normalized.empty()) {
+        return R"({"ok":false,"error":"note_empty"})";
+    }
+
+    const std::string record =
+        std::to_string(static_cast<long long>(time(nullptr))) + "\t" + normalized;
+    const esp_err_t result =
+        AppendBoundedRecordLocked(kNotesPath, record, kMaxNotes, kMaxNotesFileBytes);
+    if (result != ESP_OK) {
+        SetErrorLocked("save_note", result);
+        return R"({"ok":false,"error":"note_write_failed"})";
+    }
+    RefreshCapacityLocked();
+    return std::string(R"({"ok":true,"saved":true,"text":")") + JsonEscape(normalized) +
+           R"(","note_count":)" + std::to_string(CountRecordsLocked(kNotesPath, kMaxNotes)) + "}";
+}
+
+std::string DavieTfStorage::RecentNotesJson(int limit) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!mounted_) {
+        return R"({"ok":false,"error":"storage_not_mounted","notes":[]})";
+    }
+    limit = std::max(1, std::min(limit, 10));
+    const std::vector<std::string> records = ReadRecordsLocked(kNotesPath, kMaxNotes);
+    const size_t start =
+        records.size() > static_cast<size_t>(limit) ? records.size() - static_cast<size_t>(limit) : 0;
+    std::string json = R"({"ok":true,"notes":[)";
+    for (size_t i = records.size(); i > start; --i) {
+        if (i != records.size()) {
+            json += ",";
+        }
+        const std::string& record = records[i - 1];
+        json += R"({"created_at":)" + std::to_string(RecordTimestamp(record)) + R"(,"text":")" +
+                JsonEscape(RecordText(record)) + R"("})";
+    }
+    return json + "],\"note_count\":" + std::to_string(records.size()) + "}";
+}
+
+std::string DavieTfStorage::SaveReaderCheckpoint(const std::string& title, int index, int total,
+                                                 const std::string& state)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!mounted_ || !writable_) {
+        return R"({"ok":false,"error":"storage_not_writable"})";
+    }
+    if (title.size() > 192 || state.size() > 32 || index < 0 || total < 0 || index > total) {
+        return R"({"ok":false,"error":"checkpoint_invalid"})";
+    }
+    const std::string clean_title = NormalizeSingleLine(title, 192);
+    const std::string clean_state = NormalizeSingleLine(state, 32);
+    if (clean_title.empty() || clean_state.empty()) {
+        return R"({"ok":false,"error":"checkpoint_invalid"})";
+    }
+    const std::string payload =
+        std::string(R"({"ok":true,"title":")") + JsonEscape(clean_title) + R"(","index":)" +
+        std::to_string(index) + R"(,"total":)" + std::to_string(total) + R"(,"state":")" +
+        JsonEscape(clean_state) + R"(","updated_at":)" +
+        std::to_string(static_cast<long long>(time(nullptr))) + "}";
+    const esp_err_t result = WriteAtomicFileLocked(kReaderCheckpointPath, payload);
+    if (result != ESP_OK) {
+        SetErrorLocked("save_checkpoint", result);
+        return R"({"ok":false,"error":"checkpoint_write_failed"})";
+    }
+    RefreshCapacityLocked();
+    return payload;
+}
+
+std::string DavieTfStorage::ReaderCheckpointJson() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!mounted_) {
+        return R"({"ok":false,"error":"storage_not_mounted"})";
+    }
+    const std::string payload = ReadSmallFileLocked(kReaderCheckpointPath, 1024);
+    if (payload.empty()) {
+        return R"({"ok":true,"checkpoint":null})";
+    }
+    if (payload.front() != '{' || payload.back() != '}') {
+        return R"({"ok":false,"error":"checkpoint_corrupt"})";
+    }
+    return payload;
+}
+
+std::string DavieTfStorage::AppendDiagnostic(const std::string& event, const std::string& detail)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!mounted_ || !writable_) {
+        return R"({"ok":false,"error":"storage_not_writable"})";
+    }
+    if (event.size() > kMaxDiagnosticEventBytes || detail.size() > kMaxDiagnosticDetailBytes) {
+        return R"({"ok":false,"error":"diagnostic_too_long"})";
+    }
+    const std::string clean_event = NormalizeSingleLine(event, kMaxDiagnosticEventBytes);
+    const std::string clean_detail = NormalizeSingleLine(detail, kMaxDiagnosticDetailBytes);
+    if (clean_event.empty()) {
+        return R"({"ok":false,"error":"diagnostic_event_empty"})";
+    }
+    const std::string record = std::to_string(static_cast<long long>(time(nullptr))) + "\t" +
+                               clean_event + (clean_detail.empty() ? "" : ": " + clean_detail);
+    const esp_err_t result = AppendBoundedRecordLocked(kDiagnosticsPath, record, kMaxDiagnostics,
+                                                        kMaxDiagnosticsFileBytes);
+    if (result != ESP_OK) {
+        SetErrorLocked("append_diagnostic", result);
+        return R"({"ok":false,"error":"diagnostic_write_failed"})";
+    }
+    return R"({"ok":true,"saved":true})";
+}
+
+std::string DavieTfStorage::RecentDiagnosticsJson(int limit) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!mounted_) {
+        return R"({"ok":false,"error":"storage_not_mounted","events":[]})";
+    }
+    limit = std::max(1, std::min(limit, 10));
+    const std::vector<std::string> records = ReadRecordsLocked(kDiagnosticsPath, kMaxDiagnostics);
+    const size_t start =
+        records.size() > static_cast<size_t>(limit) ? records.size() - static_cast<size_t>(limit) : 0;
+    std::string json = R"({"ok":true,"events":[)";
+    for (size_t i = records.size(); i > start; --i) {
+        if (i != records.size()) {
+            json += ",";
+        }
+        const std::string& record = records[i - 1];
+        json += R"({"created_at":)" + std::to_string(RecordTimestamp(record)) + R"(,"event":")" +
+                JsonEscape(RecordText(record)) + R"("})";
+    }
+    return json + "],\"event_count\":" + std::to_string(records.size()) + "}";
 }
 
 esp_err_t DavieTfStorage::EnsureDirectoriesLocked()
@@ -192,6 +409,108 @@ esp_err_t DavieTfStorage::EnsureDirectoriesLocked()
         }
     }
     return ESP_OK;
+}
+
+esp_err_t DavieTfStorage::AppendBoundedRecordLocked(const char* path, const std::string& record,
+                                                    size_t max_records, size_t max_bytes)
+{
+    std::vector<std::string> records = ReadRecordsLocked(path, max_records);
+    records.push_back(record);
+    size_t bytes = 0;
+    for (const auto& item : records) {
+        bytes += item.size() + 1;
+    }
+    while (records.size() > max_records || (bytes > max_bytes && records.size() > 1)) {
+        bytes -= records.front().size() + 1;
+        records.erase(records.begin());
+    }
+
+    std::string payload;
+    payload.reserve(bytes);
+    for (const auto& item : records) {
+        payload += item;
+        payload.push_back('\n');
+    }
+    return WriteAtomicFileLocked(path, payload);
+}
+
+esp_err_t DavieTfStorage::WriteAtomicFileLocked(const char* path, const std::string& payload)
+{
+    std::string temporary(path);
+    const size_t separator = temporary.find_last_of('/');
+    const size_t extension = temporary.find_last_of('.');
+    if (extension != std::string::npos &&
+        (separator == std::string::npos || extension > separator)) {
+        temporary.replace(extension, std::string::npos, ".tmp");
+    } else {
+        temporary += ".tmp";
+    }
+    FILE* output = fopen(temporary.c_str(), "wb");
+    if (output == nullptr) {
+        return ESP_FAIL;
+    }
+    const bool write_ok = fwrite(payload.data(), 1, payload.size(), output) == payload.size();
+    const bool flush_ok = fflush(output) == 0;
+    const bool sync_ok = fsync(fileno(output)) == 0;
+    const bool close_ok = fclose(output) == 0;
+    if (!write_ok || !flush_ok || !sync_ok || !close_ok) {
+        unlink(temporary.c_str());
+        return ESP_FAIL;
+    }
+    unlink(path);
+    if (rename(temporary.c_str(), path) != 0) {
+        unlink(temporary.c_str());
+        return ESP_FAIL;
+    }
+    return ESP_OK;
+}
+
+std::vector<std::string> DavieTfStorage::ReadRecordsLocked(const char* path,
+                                                           size_t max_records) const
+{
+    std::vector<std::string> records;
+    FILE* input = fopen(path, "rb");
+    if (input == nullptr) {
+        return records;
+    }
+    char buffer[768];
+    while (fgets(buffer, sizeof(buffer), input) != nullptr) {
+        std::string line(buffer);
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+            line.pop_back();
+        }
+        if (!line.empty()) {
+            records.push_back(line);
+            if (records.size() > max_records) {
+                records.erase(records.begin());
+            }
+        }
+    }
+    fclose(input);
+    return records;
+}
+
+std::string DavieTfStorage::ReadSmallFileLocked(const char* path, size_t max_bytes) const
+{
+    FILE* input = fopen(path, "rb");
+    if (input == nullptr) {
+        return "";
+    }
+    std::string result;
+    result.resize(max_bytes);
+    const size_t bytes_read = fread(result.data(), 1, max_bytes, input);
+    const bool has_more = fgetc(input) != EOF;
+    fclose(input);
+    if (has_more) {
+        return "";
+    }
+    result.resize(bytes_read);
+    return result;
+}
+
+size_t DavieTfStorage::CountRecordsLocked(const char* path, size_t max_records) const
+{
+    return ReadRecordsLocked(path, max_records).size();
 }
 
 esp_err_t DavieTfStorage::RunSelfTestLocked()
