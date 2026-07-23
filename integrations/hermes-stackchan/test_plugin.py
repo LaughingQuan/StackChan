@@ -863,3 +863,24 @@ def test_plugin_registers_status_speech_and_vision_tools():
             plugin_module._handle_current_state_pre_gateway_dispatch,
         ),
     ]
+
+
+def test_plugin_manifest_declares_all_runtime_tools_and_hooks():
+    manifest = (HERE / "plugin.yaml").read_text(encoding="utf-8")
+
+    for tool_name in (
+        "stackchan_status",
+        "stackchan_say",
+        "stackchan_vision",
+        "stackchan_reader",
+        "stackchan_control",
+        "stackchan_reminder",
+        "stackchan_storage",
+    ):
+        assert f"- {tool_name}" in manifest
+    for hook_name in (
+        "pre_llm_call",
+        "transform_llm_output",
+        "pre_gateway_dispatch",
+    ):
+        assert f"- {hook_name}" in manifest

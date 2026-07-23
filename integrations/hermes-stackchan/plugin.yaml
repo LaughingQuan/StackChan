@@ -1,5 +1,5 @@
 name: jm-stackchan
-version: 0.1.0
+version: 0.2.0
 description: >-
   Davie's local StackChan body adapter. Exposes explicit, testable tools for
   health/capability discovery and, when the device is awake, speech, vision,
@@ -14,3 +14,8 @@ provides_tools:
   - stackchan_reader
   - stackchan_control
   - stackchan_reminder
+  - stackchan_storage
+provides_hooks:
+  - pre_llm_call
+  - transform_llm_output
+  - pre_gateway_dispatch
