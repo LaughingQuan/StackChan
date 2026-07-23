@@ -24,15 +24,46 @@ def test_endpoint_ignores_noise_then_commits_speech() -> None:
         started = detector.feed(_frame(1800)).speech_started or started
     assert started
     completed = None
+    completed_result = None
     for _ in range(6):
-        completed = detector.feed(_frame(20)).complete_pcm or completed
+        result = detector.feed(_frame(20))
+        if result.complete_pcm:
+            completed = result.complete_pcm
+            completed_result = result
     assert completed is not None
+    assert completed_result is not None
+    assert completed_result.captured_ms > completed_result.voiced_ms >= 300
+    assert completed_result.peak_rms == 1800
+    assert completed_result.mean_rms > 0
     assert len(completed) > 5 * 960 * 2
     status = detector.snapshot()
     assert status["rms"] == 20
     assert status["threshold"] >= 400
     assert status["speaking"] is False
     assert status["completed_turns"] == 1
+    assert status["last_completed_ms"] == completed_result.captured_ms
+    assert status["last_completed_peak_rms"] == 1800
+
+
+def test_endpoint_abandons_short_noise_burst_without_waiting_for_max_turn() -> None:
+    detector = PcmEndpointDetector(
+        frame_duration_ms=60,
+        silence_ms=300,
+        min_speech_ms=240,
+        max_turn_ms=5000,
+        min_rms=400,
+    )
+    detector.feed(_frame(1000))
+    started = detector.feed(_frame(1000))
+    assert started.speech_started is True
+    result = None
+    for _ in range(5):
+        result = detector.feed(_frame(20))
+    assert result is not None
+    assert result.speech_abandoned is True
+    assert result.complete_pcm is None
+    assert detector.snapshot()["speaking"] is False
+    assert detector.snapshot()["discarded_flushes"] == 1
 
 
 def test_endpoint_snapshot_exposes_live_noise_and_candidate_state() -> None:

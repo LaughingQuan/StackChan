@@ -13,6 +13,16 @@ class DavieReply:
     session_id: str | None
 
 
+@dataclass(frozen=True)
+class TranscriptionResult:
+    transcript: str
+    ctc_text: str = ""
+    language: str = ""
+    model: str = ""
+    elapsed_seconds: float | None = None
+    inference_seconds: float | None = None
+
+
 class MediaClient:
     def __init__(self, base_url: str, *, timeout: float = 180.0):
         self.base_url = base_url.rstrip("/")
@@ -21,7 +31,9 @@ class MediaClient:
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def transcribe(self, wav_bytes: bytes, *, hotwords: list[str]) -> str:
+    async def transcribe(
+        self, wav_bytes: bytes, *, hotwords: list[str]
+    ) -> TranscriptionResult:
         response = await self.client.post(
             f"{self.base_url}/v1/audio/transcribe",
             json={
@@ -33,7 +45,14 @@ class MediaClient:
         )
         response.raise_for_status()
         payload = response.json()
-        return str(payload.get("transcript") or "").strip()
+        return TranscriptionResult(
+            transcript=str(payload.get("transcript") or "").strip(),
+            ctc_text=str(payload.get("ctc_text") or "").strip(),
+            language=str(payload.get("language") or "").strip(),
+            model=str(payload.get("model") or "").strip(),
+            elapsed_seconds=_optional_float(payload.get("elapsed_seconds")),
+            inference_seconds=_optional_float(payload.get("inference_seconds")),
+        )
 
     async def synthesize(self, text: str) -> bytes:
         response = await self.client.post(
@@ -152,3 +171,10 @@ def spoken_text(value: str, *, max_chars: int, max_sentences: int) -> str:
 def sentence_segments(value: str) -> list[str]:
     segments = [part.strip() for part in re.split(r"(?<=[.!?。！？])\s+", value) if part.strip()]
     return segments or ([value.strip()] if value.strip() else [])
+
+
+def _optional_float(value) -> float | None:
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None

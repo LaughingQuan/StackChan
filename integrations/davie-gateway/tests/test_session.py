@@ -75,6 +75,17 @@ class SleepMedia(FakeMedia):
         return "Goodbye Davie"
 
 
+class NameOnlyMedia(FakeMedia):
+    async def transcribe(self, _wav: bytes, *, hotwords: list[str]) -> str:
+        assert hotwords == ["Davie", "StackChan"]
+        return "Jason, Jason, Jason, Jason."
+
+
+class HallucinatingMedia(FakeMedia):
+    async def transcribe(self, _wav: bytes, *, hotwords: list[str]) -> str:
+        return " ".join(["imagined"] * 40)
+
+
 def _pcm_frame(amplitude: int) -> bytes:
     return struct.pack("<960h", *([amplitude] * 960))
 
@@ -201,6 +212,59 @@ async def test_inactivity_watchdog_returns_device_to_sleep() -> None:
     assert status["close_reason"] == "inactivity_timeout"
     assert transport.closed is True
     assert any(item.get("status") == "Sleeping" for item in transport.json)
+
+
+async def test_name_only_wake_tail_is_rejected_before_davie() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=NameOnlyMedia(),
+        davie=NoDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+
+    await session._process_turn(_pcm_frame(1800) * 5)
+
+    status = session.status()
+    assert status["accepted_turn_count"] == 0
+    assert status["rejected_transcript_count"] == 1
+    assert status["last_transcription_quality"]["reason"] == "wake_or_name_only"
+    assert status["last_error"] == "asr_rejected_wake_or_name_only"
+    assert not any(item.get("type") == "stt" for item in transport.json)
+    await session.close()
+
+
+async def test_implausibly_fast_transcript_is_rejected_before_davie() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(max_transcript_words_per_second=6),
+        media=HallucinatingMedia(),
+        davie=NoDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+
+    await session._process_turn(_pcm_frame(1800) * 10)
+
+    assert session.rejected_transcript_count == 1
+    assert session.last_transcription_quality["reason"] == "implausible_transcript_rate"
+    assert session.last_transcript == ""
+    await session.close()
 
 
 async def test_official_mcp_is_initialized_by_gateway_and_tools_are_discovered() -> None:
@@ -342,12 +406,68 @@ async def test_speech_start_cancels_inflight_response_before_tts() -> None:
     await session.handle_binary(_pcm_frame(1800))
     await session.handle_binary(_pcm_frame(1800))
 
+    assert response_cancelled.is_set() is False
+    assert session.barge_in_candidate is True
+    assert session.barge_in_confirmed_count == 0
+
+    for _ in range(4):
+        await session.handle_binary(_pcm_frame(1800))
+
     assert response_cancelled.is_set()
     assert session.response_task is None
     assert session.generation_id == generation + 1
     assert session.interrupt_count == 1
+    assert session.barge_in_candidate_count == 1
+    assert session.barge_in_confirmed_count == 1
+    assert session.last_barge_in_decision == "confirmed_speech"
     assert transport.json[-1]["state"] == "stop"
     assert transport.json[-1]["reason"] == "barge_in"
+    await session.close()
+
+
+async def test_short_noise_burst_does_not_cancel_inflight_response() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(
+            endpoint_silence_ms=300,
+            endpoint_min_speech_ms=240,
+            endpoint_min_rms=300,
+            barge_in_confirmation_ms=360,
+        ),
+        media=FakeMedia(),
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+
+    response_cancelled = asyncio.Event()
+
+    async def slow_response() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            response_cancelled.set()
+            raise
+
+    session.response_task = asyncio.create_task(slow_response())
+    await asyncio.sleep(0)
+    await session.handle_binary(_pcm_frame(1800))
+    await session.handle_binary(_pcm_frame(1800))
+    for _ in range(5):
+        await session.handle_binary(_pcm_frame(10))
+
+    assert response_cancelled.is_set() is False
+    assert session.barge_in_candidate is False
+    assert session.barge_in_confirmed_count == 0
+    assert session.barge_in_suppressed_count == 1
+    assert session.last_barge_in_decision == "insufficient_speech"
     await session.close()
 
 
@@ -467,8 +587,8 @@ async def test_reader_barge_in_pauses_without_skipping_current_segment() -> None
     assert session.reader.state == "playing"
     assert session.reader.current() == "First sentence."
 
-    await session.handle_binary(_pcm_frame(1800))
-    await session.handle_binary(_pcm_frame(1800))
+    for _ in range(6):
+        await session.handle_binary(_pcm_frame(1800))
 
     assert session.reader.state == "paused"
     assert session.reader.index == 0

@@ -71,6 +71,13 @@ handoff:
 - 花费: ¥0；未调用任何模型/API。
 - 边界: 未把单元测试表述为真人唤醒通过；生产部署留到后续 P0 软件门禁整体通过后统一进行。
 
+### 【完成】Codex 2026-07-23 23:01 Asia/Singapore — ASR quality gate and staged barge-in
+- 发现: 每个 120ms speech start 都会立即取消生成；不足最小语音时长的噪声一旦进入 speaking 状态会卡到 20 秒 max turn；ASR 的 `Jason, Jason...`、纯名字/唤醒尾音和不可能语速的幻觉会直接调用 Davie。全局人名 hotword 还会放大错误偏置。
+- 修复: 新增音频回合的时长/有效语音/RMS 证据；短噪声在 silence deadline 主动放弃；打断改为 possible -> 360ms confirmed/完整回合两阶段；只保留设备相关 hotword；新增纯名字/唤醒、纯 filler、异常转写速率门禁与完整诊断计数。
+- 验证: Gateway `uv run pytest -q` 47 passed；锁定 venv compileall、`git diff --check` 通过。新增覆盖 Media 元数据合同、短噪声不取消、确认语音才取消、名字重复与长幻觉不进入 Davie。
+- 花费: ¥0；没有调用模型，回归使用固定 fixture。
+- 边界: 这是服务端防误触与证据层，不宣称已经替代真人声学标定；唤醒词阈值仍需近场/远场人工矩阵确认。
+
 
 ### 【完成】Codex 2026-07-23 03:05 Asia/Singapore — official StackChan 1.4.3 Davie local runtime
 - 发现: stock firmware already provided the required camera, duplex audio, motion, OTA, MCP, provisioning, and AI Agent lifecycle; the narrowest maintainable design was an upstream-first build flag plus a decoupled Xiaozhi/Davie gateway. A live vision-follow-up bug was also found: camera requests used a stable memory key instead of the active spoken session.

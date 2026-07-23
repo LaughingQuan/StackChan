@@ -8,9 +8,23 @@ import time
 import uuid
 from typing import Any, Callable, Protocol
 
-from .audio import OpusCodec, PcmEndpointDetector, iter_pcm_frames, pcm_to_wav, wav_to_pcm_async
+from .audio import (
+    EndpointResult,
+    OpusCodec,
+    PcmEndpointDetector,
+    iter_pcm_frames,
+    pcm_to_wav,
+    wav_to_pcm_async,
+)
 from .capabilities import DeviceAction, capability_reply, parse_device_action
-from .clients import DavieClient, DavieReply, MediaClient, sentence_segments, spoken_text
+from .clients import (
+    DavieClient,
+    DavieReply,
+    MediaClient,
+    TranscriptionResult,
+    sentence_segments,
+    spoken_text,
+)
 from .config import Settings
 from .protocol import (
     ClientHello,
@@ -95,7 +109,18 @@ class StackChanSession:
         self.audio_frames_sent = 0
         self.interrupt_count = 0
         self.turn_count = 0
+        self.accepted_turn_count = 0
         self.empty_transcript_count = 0
+        self.rejected_transcript_count = 0
+        self.dropped_turn_count = 0
+        self.last_rejected_transcript = ""
+        self.last_transcription_quality: dict[str, Any] = {}
+        self.barge_in_candidate = False
+        self.barge_in_candidate_count = 0
+        self.barge_in_confirmed_count = 0
+        self.barge_in_suppressed_count = 0
+        self.last_barge_in_decision = ""
+        self.last_barge_in_at: float | None = None
         self.mcp_tools: dict[str, dict[str, Any]] = {}
         self.mcp_initialized = False
         self._mcp_request_id = 0
@@ -179,13 +204,16 @@ class StackChanSession:
             self.listen_mode = str(payload.get("mode") or self.listen_mode)
             self.listening = True
             self.endpoint.reset()
+            self._clear_barge_in_candidate()
             self._mark_activity("listen_started")
             self._set_state("listening")
         elif state == "stop":
             self.listening = False
-            captured = self.endpoint.flush()
-            if captured:
-                await self._schedule_turn(captured)
+            result = self.endpoint.flush_result()
+            if result.complete_pcm:
+                if self._response_in_flight():
+                    await self._confirm_barge_in("completed_manual_turn")
+                await self._schedule_turn(result.complete_pcm, result)
             elif not self.closed:
                 self._set_state("ready")
 
@@ -296,19 +324,42 @@ class StackChanSession:
         if result.speech_started:
             self._mark_activity("speech_started")
             self._set_state("listening")
-        if result.speech_started and self._response_in_flight():
-            if self.reader.state == "playing":
-                self.reader.pause()
-            await self.cancel_response(reason="barge_in")
-            self.listening = True
+            if self._response_in_flight():
+                self.barge_in_candidate = True
+                self.barge_in_candidate_count += 1
+                self.last_barge_in_decision = "possible_speech"
+        if self.barge_in_candidate:
+            if not self._response_in_flight():
+                self._clear_barge_in_candidate("response_finished_before_confirmation")
+            elif (
+                self.endpoint.snapshot()["voiced_ms"]
+                >= self.settings.barge_in_confirmation_ms
+            ):
+                await self._confirm_barge_in("confirmed_speech")
+        if result.speech_abandoned:
+            self._clear_barge_in_candidate("insufficient_speech")
+            if not self.closed:
+                if self.speaking:
+                    self._set_state("speaking")
+                elif self._response_in_flight():
+                    self._set_state("thinking")
+                else:
+                    self._set_state("listening")
         if result.complete_pcm:
-            await self._schedule_turn(result.complete_pcm)
+            if self._response_in_flight():
+                await self._confirm_barge_in("completed_user_turn")
+            self._clear_barge_in_candidate()
+            await self._schedule_turn(result.complete_pcm, result)
 
-    async def _schedule_turn(self, pcm: bytes) -> None:
+    async def _schedule_turn(
+        self, pcm: bytes, evidence: EndpointResult | None = None
+    ) -> None:
         async with self.response_lock:
             if self.closed or self._response_in_flight():
+                self.dropped_turn_count += 1
+                self.last_error = "turn_dropped_response_in_flight"
                 return
-            self.response_task = asyncio.create_task(self._process_turn(pcm))
+            self.response_task = asyncio.create_task(self._process_turn(pcm, evidence))
 
     def _response_in_flight(self) -> bool:
         return bool(self.response_task and not self.response_task.done())
@@ -330,20 +381,35 @@ class StackChanSession:
             if self.response_task is task:
                 self.response_task = None
 
-    async def _process_turn(self, pcm: bytes) -> None:
+    async def _process_turn(
+        self, pcm: bytes, evidence: EndpointResult | None = None
+    ) -> None:
         self.turn_count += 1
         self.generation_id += 1
         generation = self.generation_id
         self._set_state("transcribing")
         try:
-            transcript = await self.media.transcribe(
+            transcription = await self.media.transcribe(
                 pcm_to_wav(pcm, self.hello.sample_rate if self.hello else self.settings.input_sample_rate),
-                hotwords=["Davie", "Jason", "Ingie", "StackChan"],
+                hotwords=["Davie", "StackChan"],
             )
             if generation != self.generation_id:
                 return
+            if isinstance(transcription, str):
+                transcription = TranscriptionResult(transcript=transcription)
+            transcript = transcription.transcript.strip()
+            quality = self._assess_transcription(transcript, pcm, evidence)
+            self.last_transcription_quality = {
+                **quality,
+                "model": transcription.model,
+                "language": transcription.language,
+                "ctc_available": bool(transcription.ctc_text),
+                "elapsed_seconds": transcription.elapsed_seconds,
+                "inference_seconds": transcription.inference_seconds,
+            }
             if not transcript:
                 self.empty_transcript_count += 1
+                self.rejected_transcript_count += 1
                 self.last_error = "asr_empty_transcript"
                 # Realtime audio can contain a wake chime tail or a short burst
                 # of ambient noise. Keep listening instead of replacing the UI
@@ -359,7 +425,14 @@ class StackChanSession:
                         }
                     )
                 return
+            if not quality["accepted"]:
+                self.rejected_transcript_count += 1
+                self.last_rejected_transcript = transcript[:240]
+                self.last_error = f"asr_rejected_{quality['reason']}"
+                return
             self.last_transcript = transcript
+            self.accepted_turn_count += 1
+            self.last_error = ""
             self._mark_activity("accepted_transcript")
             await self.transport.send_json(
                 {"session_id": self.session_id, "type": "stt", "text": transcript}
@@ -406,6 +479,94 @@ class StackChanSession:
         finally:
             if generation == self.generation_id and not self.closed and not self.speaking:
                 self._set_state("listening" if self.listening else "ready")
+
+    def _assess_transcription(
+        self,
+        transcript: str,
+        pcm: bytes,
+        evidence: EndpointResult | None,
+    ) -> dict[str, Any]:
+        sample_rate = (
+            self.hello.sample_rate
+            if self.hello
+            else self.settings.input_sample_rate
+        )
+        duration_ms = (
+            evidence.captured_ms
+            if evidence and evidence.captured_ms
+            else int((len(pcm) / 2 / max(sample_rate, 1)) * 1000)
+        )
+        normalized = transcript.lower().strip()
+        tokens = re.findall(
+            r"[a-z]+(?:'[a-z]+)?|\d+|[\u3400-\u9fff]+",
+            normalized,
+        )
+        wake_or_name_tokens = {
+            "davie",
+            "davy",
+            "davey",
+            "jason",
+            "ingie",
+            "angie",
+            "stackchan",
+            "stack",
+            "chan",
+        }
+        filler_tokens = {"ah", "er", "erm", "hm", "hmm", "uh", "um"}
+        accepted = True
+        reason = "accepted"
+        if not transcript.strip():
+            accepted = False
+            reason = "empty"
+        elif tokens and all(token in wake_or_name_tokens for token in tokens):
+            accepted = False
+            reason = "wake_or_name_only"
+        elif tokens and all(token in filler_tokens for token in tokens):
+            accepted = False
+            reason = "filler_only"
+        else:
+            duration_seconds = max(duration_ms / 1000, 0.1)
+            allowed_words = max(
+                12,
+                int(
+                    duration_seconds
+                    * self.settings.max_transcript_words_per_second
+                ),
+            )
+            if len(tokens) > allowed_words:
+                accepted = False
+                reason = "implausible_transcript_rate"
+        return {
+            "accepted": accepted,
+            "reason": reason,
+            "duration_ms": duration_ms,
+            "token_count": len(tokens),
+            "words_per_second": round(
+                len(tokens) / max(duration_ms / 1000, 0.1), 2
+            ),
+            "voiced_ms": evidence.voiced_ms if evidence else None,
+            "peak_rms": evidence.peak_rms if evidence else None,
+            "mean_rms": evidence.mean_rms if evidence else None,
+        }
+
+    def _clear_barge_in_candidate(self, suppressed_reason: str = "") -> None:
+        if self.barge_in_candidate and suppressed_reason:
+            self.barge_in_suppressed_count += 1
+            self.last_barge_in_decision = suppressed_reason
+        self.barge_in_candidate = False
+
+    async def _confirm_barge_in(self, reason: str) -> None:
+        if not self._response_in_flight():
+            self._clear_barge_in_candidate("response_finished_before_confirmation")
+            return
+        if self.reader.state == "playing":
+            self.reader.pause()
+        self.barge_in_confirmed_count += 1
+        self.last_barge_in_decision = reason
+        self.last_barge_in_at = time.time()
+        self.barge_in_candidate = False
+        await self.cancel_response(reason="barge_in")
+        self.listening = True
 
     async def _visual_reply(self, transcript: str):
         if "self.camera.take_photo" not in self.mcp_tools or not VISUAL_REQUEST_PATTERN.search(transcript):
@@ -715,6 +876,7 @@ class StackChanSession:
         async with self.response_lock:
             if self.closed:
                 return
+            self._clear_barge_in_candidate()
             had_response = self.speaking or self._response_in_flight()
             if self.reader.state == "playing":
                 self.reader.pause()
@@ -795,6 +957,7 @@ class StackChanSession:
             self.closed = True
             self.close_reason = reason
             self._set_state("closed")
+            self._clear_barge_in_candidate()
             if self.reader.state == "playing":
                 self.reader.pause()
             self.generation_id += 1
@@ -844,11 +1007,22 @@ class StackChanSession:
             "listen_mode": self.listen_mode,
             "generation_id": self.generation_id,
             "turn_count": self.turn_count,
+            "accepted_turn_count": self.accepted_turn_count,
             "empty_transcript_count": self.empty_transcript_count,
+            "rejected_transcript_count": self.rejected_transcript_count,
+            "dropped_turn_count": self.dropped_turn_count,
             "interrupt_count": self.interrupt_count,
+            "barge_in_candidate": self.barge_in_candidate,
+            "barge_in_candidate_count": self.barge_in_candidate_count,
+            "barge_in_confirmed_count": self.barge_in_confirmed_count,
+            "barge_in_suppressed_count": self.barge_in_suppressed_count,
+            "last_barge_in_decision": self.last_barge_in_decision,
+            "last_barge_in_at": self.last_barge_in_at,
             "audio_frames_received": self.audio_frames_received,
             "audio_frames_sent": self.audio_frames_sent,
             "last_transcript": self.last_transcript,
+            "last_rejected_transcript": self.last_rejected_transcript,
+            "last_transcription_quality": self.last_transcription_quality,
             "last_response": self.last_response,
             "last_error": self.last_error,
             "closed": self.closed,

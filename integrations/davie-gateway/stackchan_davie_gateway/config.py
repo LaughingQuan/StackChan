@@ -36,6 +36,8 @@ class Settings:
     endpoint_min_rms: int = 420
     session_idle_timeout_seconds: float = 120.0
     session_watchdog_interval_seconds: float = 1.0
+    barge_in_confirmation_ms: int = 360
+    max_transcript_words_per_second: float = 6.0
     max_spoken_sentences: int = 3
     max_spoken_chars: int = 520
     max_camera_image_bytes: int = 2_000_000
@@ -106,6 +108,12 @@ class Settings:
             ),
             session_watchdog_interval_seconds=float(
                 os.environ.get("STACKCHAN_SESSION_WATCHDOG_INTERVAL_SECONDS", "1")
+            ),
+            barge_in_confirmation_ms=int(
+                os.environ.get("STACKCHAN_BARGE_IN_CONFIRMATION_MS", "360")
+            ),
+            max_transcript_words_per_second=float(
+                os.environ.get("STACKCHAN_MAX_TRANSCRIPT_WORDS_PER_SECOND", "6")
             ),
             camera_snapshot_dir=os.environ.get(
                 "STACKCHAN_CAMERA_SNAPSHOT_DIR", "/var/lib/stackchan-davie/camera"

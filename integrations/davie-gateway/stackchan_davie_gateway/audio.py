@@ -128,9 +128,14 @@ def pcm_rms(pcm_s16le: bytes) -> int:
 @dataclass(frozen=True)
 class EndpointResult:
     speech_started: bool = False
+    speech_abandoned: bool = False
     complete_pcm: bytes | None = None
     rms: int = 0
     threshold: int = 0
+    captured_ms: int = 0
+    voiced_ms: int = 0
+    peak_rms: int = 0
+    mean_rms: int = 0
 
 
 class PcmEndpointDetector:
@@ -154,16 +159,24 @@ class PcmEndpointDetector:
         self._last_threshold = min_rms
         self._completed_turns = 0
         self._discarded_flushes = 0
+        self._last_completed_ms = 0
+        self._last_completed_voiced_ms = 0
+        self._last_completed_peak_rms = 0
+        self._last_completed_mean_rms = 0
         self.reset()
 
     def reset(self) -> None:
         self._pre_roll: deque[bytes] = deque(maxlen=self.pre_roll_frames)
+        self._pre_roll_rms: deque[int] = deque(maxlen=self.pre_roll_frames)
         self._frames: list[bytes] = []
         self._speaking = False
         self._candidate_frames = 0
         self._voiced_frames = 0
         self._silence_frames = 0
         self._noise_floor = 120.0
+        self._turn_rms_total = 0
+        self._turn_rms_count = 0
+        self._turn_peak_rms = 0
 
     def _threshold(self) -> int:
         return max(self.min_rms, int(self._noise_floor * 2.8))
@@ -178,6 +191,7 @@ class PcmEndpointDetector:
 
         if not self._speaking:
             self._pre_roll.append(pcm_s16le)
+            self._pre_roll_rms.append(rms)
             if voiced:
                 self._candidate_frames += 1
             else:
@@ -187,11 +201,17 @@ class PcmEndpointDetector:
                 self._speaking = True
                 speech_started = True
                 self._frames = list(self._pre_roll)
+                self._turn_rms_total = sum(self._pre_roll_rms)
+                self._turn_rms_count = len(self._pre_roll_rms)
+                self._turn_peak_rms = max(self._pre_roll_rms, default=0)
                 self._voiced_frames = self._candidate_frames
                 self._silence_frames = 0
             return EndpointResult(speech_started=speech_started, rms=rms, threshold=threshold)
 
         self._frames.append(pcm_s16le)
+        self._turn_rms_total += rms
+        self._turn_rms_count += 1
+        self._turn_peak_rms = max(self._turn_peak_rms, rms)
         if voiced:
             self._voiced_frames += 1
             self._silence_frames = 0
@@ -199,27 +219,59 @@ class PcmEndpointDetector:
             self._silence_frames += 1
 
         complete = False
-        if self._silence_frames >= self.silence_frames and self._voiced_frames >= self.min_speech_frames:
-            complete = True
+        if self._silence_frames >= self.silence_frames:
+            if self._voiced_frames >= self.min_speech_frames:
+                complete = True
+            else:
+                self._discarded_flushes += 1
+                self.reset()
+                return EndpointResult(
+                    speech_abandoned=True,
+                    rms=rms,
+                    threshold=threshold,
+                )
         if len(self._frames) >= self.max_turn_frames:
             complete = True
         if not complete:
             return EndpointResult(rms=rms, threshold=threshold)
 
-        captured = b"".join(self._frames)
-        self._completed_turns += 1
-        self.reset()
-        return EndpointResult(complete_pcm=captured, rms=rms, threshold=threshold)
+        return self._complete_result(rms=rms, threshold=threshold)
 
     def flush(self) -> bytes | None:
+        return self.flush_result().complete_pcm
+
+    def flush_result(self) -> EndpointResult:
         if not self._frames or self._voiced_frames < self.min_speech_frames:
             self._discarded_flushes += 1
             self.reset()
-            return None
+            return EndpointResult(rms=self._last_rms, threshold=self._last_threshold)
+        return self._complete_result(rms=self._last_rms, threshold=self._last_threshold)
+
+    def _complete_result(self, *, rms: int, threshold: int) -> EndpointResult:
         captured = b"".join(self._frames)
+        captured_ms = len(self._frames) * self.frame_duration_ms
+        voiced_ms = self._voiced_frames * self.frame_duration_ms
+        mean_rms = (
+            int(self._turn_rms_total / self._turn_rms_count)
+            if self._turn_rms_count
+            else 0
+        )
+        result = EndpointResult(
+            complete_pcm=captured,
+            rms=rms,
+            threshold=threshold,
+            captured_ms=captured_ms,
+            voiced_ms=voiced_ms,
+            peak_rms=self._turn_peak_rms,
+            mean_rms=mean_rms,
+        )
         self._completed_turns += 1
+        self._last_completed_ms = captured_ms
+        self._last_completed_voiced_ms = voiced_ms
+        self._last_completed_peak_rms = self._turn_peak_rms
+        self._last_completed_mean_rms = mean_rms
         self.reset()
-        return captured
+        return result
 
     def snapshot(self) -> dict[str, int | float | bool]:
         return {
@@ -233,6 +285,10 @@ class PcmEndpointDetector:
             "captured_ms": len(self._frames) * self.frame_duration_ms,
             "completed_turns": self._completed_turns,
             "discarded_flushes": self._discarded_flushes,
+            "last_completed_ms": self._last_completed_ms,
+            "last_completed_voiced_ms": self._last_completed_voiced_ms,
+            "last_completed_peak_rms": self._last_completed_peak_rms,
+            "last_completed_mean_rms": self._last_completed_mean_rms,
         }
 
 
