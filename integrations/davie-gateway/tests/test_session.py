@@ -132,6 +132,16 @@ async def test_session_runs_turn_and_sends_audio() -> None:
     assert any(item.get("type") == "tts" and item.get("state") == "stop" for item in transport.json)
     assert session.status()["endpoint"]["completed_turns"] == 1
     assert transport.binary
+    timing = session.status()["last_turn_timing"]
+    assert timing["outcome"] == "completed"
+    assert timing["input_audio_ms"] > 0
+    assert timing["asr_ms"] >= 0
+    assert timing["llm_ms"] >= 0
+    assert timing["response_ready_ms"] >= timing["asr_ms"]
+    assert timing["tts_synthesis_ms"] >= 0
+    assert timing["first_audio_ms"] >= timing["response_ready_ms"]
+    assert timing["streamed_audio_ms"] > 0
+    assert timing["total_ms"] >= timing["first_audio_ms"]
     await session.close()
 
 
@@ -164,6 +174,12 @@ async def test_realtime_empty_transcript_keeps_listening_without_failure_alert()
     assert session.last_error == "asr_empty_transcript"
     assert session.state == "listening"
     assert not any(item.get("type") == "alert" for item in transport.json)
+    timing = session.status()["last_turn_timing"]
+    assert timing["outcome"] == "empty_transcript"
+    assert timing["asr_ms"] >= 0
+    assert timing["llm_ms"] is None
+    assert timing["first_audio_ms"] is None
+    assert timing["total_ms"] >= timing["asr_ms"]
     await session.close()
 
 
@@ -321,6 +337,8 @@ async def test_name_only_wake_tail_is_rejected_before_davie() -> None:
     assert status["rejected_transcript_count"] == 1
     assert status["last_transcription_quality"]["reason"] == "wake_or_name_only"
     assert status["last_error"] == "asr_rejected_wake_or_name_only"
+    assert status["last_turn_timing"]["outcome"] == "rejected_transcript"
+    assert status["last_turn_timing"]["first_audio_ms"] is None
     assert not any(item.get("type") == "stt" for item in transport.json)
     await session.close()
 
@@ -451,6 +469,59 @@ async def test_abort_invalidates_generation() -> None:
     assert session.generation_id == generation + 1
     assert session.interrupt_count == 1
     assert transport.json[-1]["state"] == "stop"
+    await session.close()
+
+
+async def test_cancelled_turn_timing_does_not_overwrite_next_generation() -> None:
+    class BlockingDavie(FakeDavie):
+        def __init__(self):
+            self.started = asyncio.Event()
+
+        async def chat(
+            self,
+            text: str,
+            *,
+            device_id: str,
+            session_id: str | None,
+        ) -> DavieReply:
+            self.started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    transport = FakeTransport()
+    blocking_davie = BlockingDavie()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=FakeMedia(),
+        davie=blocking_davie,
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    first_task = asyncio.create_task(session._process_turn(_pcm_frame(1800)))
+    session.response_task = first_task
+    await blocking_davie.started.wait()
+
+    await session.cancel_response(reason="test_cancel")
+
+    cancelled_timing = session.status()["last_turn_timing"]
+    assert cancelled_timing["outcome"] == "cancelled"
+    assert cancelled_timing["llm_ms"] >= 0
+    assert cancelled_timing["first_audio_ms"] is None
+    assert cancelled_timing["total_ms"] >= cancelled_timing["asr_ms"]
+
+    session.davie = FakeDavie()
+    await session._process_turn(_pcm_frame(1800))
+    completed_timing = session.status()["last_turn_timing"]
+    assert completed_timing["generation_id"] > cancelled_timing["generation_id"]
+    assert completed_timing["outcome"] == "completed"
+    assert completed_timing["first_audio_ms"] is not None
     await session.close()
 
 

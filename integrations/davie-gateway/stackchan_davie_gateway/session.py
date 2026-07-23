@@ -117,6 +117,7 @@ class StackChanSession:
         self.dropped_turn_count = 0
         self.last_rejected_transcript = ""
         self.last_transcription_quality: dict[str, Any] = {}
+        self.last_turn_timing: dict[str, Any] = {}
         self.barge_in_candidate = False
         self.barge_in_candidate_count = 0
         self.barge_in_confirmed_count = 0
@@ -389,16 +390,57 @@ class StackChanSession:
         self.turn_count += 1
         self.generation_id += 1
         generation = self.generation_id
+        turn_started_monotonic = time.monotonic()
+        timing = {
+            "generation_id": generation,
+            "started_at": time.time(),
+            "outcome": "in_progress",
+            "input_audio_ms": (
+                evidence.captured_ms
+                if evidence and evidence.captured_ms
+                else self._pcm_duration_ms(pcm)
+            ),
+            "voiced_audio_ms": evidence.voiced_ms if evidence else None,
+            "asr_ms": None,
+            "asr_provider_ms": None,
+            "llm_ms": None,
+            "response_ready_ms": None,
+            "tts_synthesis_ms": 0.0,
+            "first_audio_ms": None,
+            "streamed_audio_ms": 0,
+            "total_ms": None,
+        }
+        self.last_turn_timing = timing
         self._set_state("transcribing")
         try:
-            transcription = await self.media.transcribe(
-                pcm_to_wav(pcm, self.hello.sample_rate if self.hello else self.settings.input_sample_rate),
-                hotwords=["Davie", "StackChan"],
-            )
+            asr_started = time.monotonic()
+            try:
+                transcription = await self.media.transcribe(
+                    pcm_to_wav(pcm, self.hello.sample_rate if self.hello else self.settings.input_sample_rate),
+                    hotwords=["Davie", "StackChan"],
+                )
+            finally:
+                self._update_turn_timing(
+                    timing,
+                    asr_ms=self._elapsed_ms(asr_started),
+                )
             if generation != self.generation_id:
+                self._finish_turn_timing(
+                    timing,
+                    turn_started_monotonic,
+                    outcome="superseded",
+                )
                 return
             if isinstance(transcription, str):
                 transcription = TranscriptionResult(transcript=transcription)
+            self._update_turn_timing(
+                timing,
+                asr_provider_ms=(
+                    round(transcription.elapsed_seconds * 1000, 3)
+                    if transcription.elapsed_seconds is not None
+                    else None
+                ),
+            )
             transcript = transcription.transcript.strip()
             quality = self._assess_transcription(transcript, pcm, evidence)
             self.last_transcription_quality = {
@@ -432,6 +474,11 @@ class StackChanSession:
                             "emotion": "neutral",
                         }
                     )
+                self._finish_turn_timing(
+                    timing,
+                    turn_started_monotonic,
+                    outcome="empty_transcript",
+                )
                 return
             self.consecutive_empty_transcript_count = 0
             if not quality["accepted"]:
@@ -439,6 +486,11 @@ class StackChanSession:
                 self.last_rejected_transcript = transcript[:240]
                 self.last_error = f"asr_rejected_{quality['reason']}"
                 self._set_state("listening")
+                self._finish_turn_timing(
+                    timing,
+                    turn_started_monotonic,
+                    outcome="rejected_transcript",
+                )
                 return
             self.last_transcript = transcript
             self.accepted_turn_count += 1
@@ -448,19 +500,41 @@ class StackChanSession:
                 {"session_id": self.session_id, "type": "stt", "text": transcript}
             )
             action = parse_device_action(transcript)
-            if action and await self._handle_device_action(action, generation):
+            if action and await self._handle_device_action(
+                action,
+                generation,
+                timing=timing,
+                turn_started_monotonic=turn_started_monotonic,
+            ):
+                self._finish_turn_timing(
+                    timing,
+                    turn_started_monotonic,
+                    outcome="device_action",
+                )
                 return
             self._set_state("thinking")
-            visual_reply = await self._visual_reply(transcript)
-            if visual_reply:
-                reply = visual_reply
-            else:
-                reply = await self.davie.chat(
-                    transcript,
-                    device_id=self.device_id,
-                    session_id=self.davie_session_id,
+            llm_started = time.monotonic()
+            try:
+                visual_reply = await self._visual_reply(transcript)
+                if visual_reply:
+                    reply = visual_reply
+                else:
+                    reply = await self.davie.chat(
+                        transcript,
+                        device_id=self.device_id,
+                        session_id=self.davie_session_id,
+                    )
+            finally:
+                self._update_turn_timing(
+                    timing,
+                    llm_ms=self._elapsed_ms(llm_started),
                 )
             if generation != self.generation_id:
+                self._finish_turn_timing(
+                    timing,
+                    turn_started_monotonic,
+                    outcome="superseded",
+                )
                 return
             self.davie_session_id = reply.session_id or self.davie_session_id
             response_text = spoken_text(
@@ -468,13 +542,45 @@ class StackChanSession:
                 max_chars=self.settings.max_spoken_chars,
                 max_sentences=self.settings.max_spoken_sentences,
             )
+            self._update_turn_timing(
+                timing,
+                response_ready_ms=self._elapsed_ms(turn_started_monotonic),
+            )
             self.last_response = response_text
-            await self._speak(response_text, generation)
+            await self._speak(
+                response_text,
+                generation,
+                timing=timing,
+                turn_started_monotonic=turn_started_monotonic,
+            )
+            if generation == self.generation_id:
+                self._finish_turn_timing(
+                    timing,
+                    turn_started_monotonic,
+                    outcome="completed",
+                )
+            else:
+                self._finish_turn_timing(
+                    timing,
+                    turn_started_monotonic,
+                    outcome="superseded",
+                )
         except asyncio.CancelledError:
+            self._finish_turn_timing(
+                timing,
+                turn_started_monotonic,
+                outcome="cancelled",
+            )
             raise
         except Exception as exc:
             LOGGER.exception("StackChan turn failed")
             self.last_error = type(exc).__name__
+            self._finish_turn_timing(
+                timing,
+                turn_started_monotonic,
+                outcome="error",
+                error_type=type(exc).__name__,
+            )
             if generation == self.generation_id:
                 self.speaking = False
                 await self.transport.send_json(
@@ -487,8 +593,57 @@ class StackChanSession:
                     }
                 )
         finally:
+            if timing.get("outcome") == "in_progress":
+                self._finish_turn_timing(
+                    timing,
+                    turn_started_monotonic,
+                    outcome=(
+                        "superseded"
+                        if generation != self.generation_id
+                        else "error"
+                    ),
+                )
             if generation == self.generation_id and not self.closed and not self.speaking:
                 self._set_state("listening" if self.listening else "ready")
+
+    def _pcm_duration_ms(self, pcm: bytes) -> int:
+        sample_rate = (
+            self.hello.sample_rate
+            if self.hello
+            else self.settings.input_sample_rate
+        )
+        return round((len(pcm) / 2 / max(sample_rate, 1)) * 1000)
+
+    @staticmethod
+    def _elapsed_ms(started_monotonic: float) -> float:
+        return round((time.monotonic() - started_monotonic) * 1000, 3)
+
+    def _update_turn_timing(
+        self,
+        timing: dict[str, Any],
+        **values: Any,
+    ) -> None:
+        if self.last_turn_timing is timing:
+            timing.update(values)
+
+    def _finish_turn_timing(
+        self,
+        timing: dict[str, Any],
+        turn_started_monotonic: float,
+        *,
+        outcome: str,
+        **values: Any,
+    ) -> None:
+        if self.last_turn_timing is not timing:
+            return
+        timing.update(
+            {
+                "outcome": outcome,
+                "completed_at": time.time(),
+                "total_ms": self._elapsed_ms(turn_started_monotonic),
+                **values,
+            }
+        )
 
     def _assess_transcription(
         self,
@@ -590,26 +745,53 @@ class StackChanSession:
             LOGGER.warning("StackChan camera tool did not return a usable result", exc_info=True)
             return None
 
-    async def _handle_device_action(self, action: DeviceAction, generation: int) -> bool:
+    async def _handle_device_action(
+        self,
+        action: DeviceAction,
+        generation: int,
+        *,
+        timing: dict[str, Any] | None = None,
+        turn_started_monotonic: float | None = None,
+    ) -> bool:
         if action.kind == "session_sleep":
             text = "晚安，需要我时再叫 Davie。" if action.chinese else "Goodbye. Say Davie when you need me again."
-            await self._speak(text, generation)
+            await self._speak(
+                text,
+                generation,
+                timing=timing,
+                turn_started_monotonic=turn_started_monotonic,
+            )
             await self.sleep(reason="voice_sleep", announce=False)
             return True
         if action.kind == "help":
-            await self._speak(capability_reply(chinese=action.chinese), generation)
+            await self._speak(
+                capability_reply(chinese=action.chinese),
+                generation,
+                timing=timing,
+                turn_started_monotonic=turn_started_monotonic,
+            )
             return True
         if action.kind == "reader_pause":
             changed = self.reader.pause()
             text = "朗读已暂停。" if action.chinese else "Reading is paused."
             if not changed and not self.reader.segments:
                 text = "还没有加载阅读内容。" if action.chinese else "No reading is loaded yet."
-            await self._speak(text, generation)
+            await self._speak(
+                text,
+                generation,
+                timing=timing,
+                turn_started_monotonic=turn_started_monotonic,
+            )
             return True
         if action.kind == "reader_resume":
             if not self.reader.resume():
                 text = "没有可以继续的阅读内容。" if action.chinese else "There is no reading to continue."
-                await self._speak(text, generation)
+                await self._speak(
+                    text,
+                    generation,
+                    timing=timing,
+                    turn_started_monotonic=turn_started_monotonic,
+                )
                 return True
             await self._run_reader(generation)
             return True
@@ -618,7 +800,12 @@ class StackChanSession:
             text = "朗读已停止，下次会从开头开始。" if action.chinese else "Reading stopped. It will restart from the beginning."
             if not changed:
                 text = "还没有加载阅读内容。" if action.chinese else "No reading is loaded yet."
-            await self._speak(text, generation)
+            await self._speak(
+                text,
+                generation,
+                timing=timing,
+                turn_started_monotonic=turn_started_monotonic,
+            )
             return True
         if action.kind == "reader_status":
             status = self.reader.status()
@@ -628,7 +815,12 @@ class StackChanSession:
                 text = f"正在读《{status['title']}》，进度约百分之 {status['progress_percent']}。"
             else:
                 text = f"We are reading {status['title']}, at about {status['progress_percent']} percent."
-            await self._speak(text, generation)
+            await self._speak(
+                text,
+                generation,
+                timing=timing,
+                turn_started_monotonic=turn_started_monotonic,
+            )
             return True
 
         tool_name = ""
@@ -661,7 +853,12 @@ class StackChanSession:
         except (ProtocolError, TimeoutError):
             LOGGER.warning("StackChan local action failed: %s", action.kind, exc_info=True)
             text = "这个设备功能目前不可用。" if action.chinese else "That device control is unavailable right now."
-        await self._speak(text, generation)
+        await self._speak(
+            text,
+            generation,
+            timing=timing,
+            turn_started_monotonic=turn_started_monotonic,
+        )
         return True
 
     async def _run_reader(self, generation: int) -> None:
@@ -739,7 +936,14 @@ class StackChanSession:
                 return str(payload.get("result") or "").strip()
         return ""
 
-    async def _speak(self, text: str, generation: int) -> None:
+    async def _speak(
+        self,
+        text: str,
+        generation: int,
+        *,
+        timing: dict[str, Any] | None = None,
+        turn_started_monotonic: float | None = None,
+    ) -> None:
         if not text:
             return
         self.last_response = text
@@ -747,6 +951,8 @@ class StackChanSession:
         self._set_state("speaking")
         await self.transport.send_json({"session_id": self.session_id, "type": "llm", "emotion": "happy"})
         await self.transport.send_json({"session_id": self.session_id, "type": "tts", "state": "start"})
+        streamed_audio_ms = 0
+        tts_synthesis_ms = 0.0
         try:
             for sentence in sentence_segments(text):
                 if generation != self.generation_id:
@@ -759,8 +965,17 @@ class StackChanSession:
                         "text": sentence,
                     }
                 )
-                wav_bytes = await self.media.synthesize(sentence)
-                pcm = await wav_to_pcm_async(wav_bytes, self.settings.output_sample_rate)
+                synthesis_started = time.monotonic()
+                try:
+                    wav_bytes = await self.media.synthesize(sentence)
+                    pcm = await wav_to_pcm_async(wav_bytes, self.settings.output_sample_rate)
+                finally:
+                    tts_synthesis_ms += self._elapsed_ms(synthesis_started)
+                    if timing is not None:
+                        self._update_turn_timing(
+                            timing,
+                            tts_synthesis_ms=round(tts_synthesis_ms, 3),
+                        )
                 for frame in iter_pcm_frames(
                     pcm,
                     sample_rate=self.settings.output_sample_rate,
@@ -774,8 +989,26 @@ class StackChanSession:
                         pack_audio_frame(encoded, self.hello.version if self.hello else 1, timestamp_ms=timestamp)
                     )
                     self.audio_frames_sent += 1
+                    streamed_audio_ms += self.settings.frame_duration_ms
+                    if (
+                        timing is not None
+                        and turn_started_monotonic is not None
+                        and timing.get("first_audio_ms") is None
+                    ):
+                        self._update_turn_timing(
+                            timing,
+                            first_audio_ms=self._elapsed_ms(
+                                turn_started_monotonic
+                            ),
+                        )
                     await asyncio.sleep(self.settings.frame_duration_ms / 1000)
         finally:
+            if timing is not None:
+                self._update_turn_timing(
+                    timing,
+                    tts_synthesis_ms=round(tts_synthesis_ms, 3),
+                    streamed_audio_ms=streamed_audio_ms,
+                )
             if generation == self.generation_id:
                 self.speaking = False
                 await self.transport.send_json(
@@ -1035,6 +1268,7 @@ class StackChanSession:
             "last_transcript": self.last_transcript,
             "last_rejected_transcript": self.last_rejected_transcript,
             "last_transcription_quality": self.last_transcription_quality,
+            "last_turn_timing": dict(self.last_turn_timing),
             "last_response": self.last_response,
             "last_error": self.last_error,
             "closed": self.closed,

@@ -241,3 +241,11 @@ handoff:
 - 恢复: 刷写前完整 16MB 镜像保存于 `/Users/jm2m/NAS/ClawBackups/Hermes/backups/stackchan/pre-low-latency-wifi-20260724-012447`，SHA-256 manifest 校验通过。
 - 花费: ¥0；仅使用本地服务。
 - 边界: 网络与协议证据不能替代真人近场/远场唤醒、扬声器听感和播放中插话验收，这些仍是 pending-human。
+
+### 【完成】Codex 2026-07-24 02:08 Asia/Singapore — generation-safe voice latency evidence
+- 发现: 完整本地语音 smoke 只能看到 11.116 秒总时间，无法区分自然输入/播放时长与 ASR、Davie、TTS 等可优化等待，容易错误调整端点或牺牲回答质量。
+- 修复: Gateway 0.3.3 新增 generation-safe `last_turn_timing`，分别记录输入与有效语音时长、Gateway/服务端 ASR、Davie/视觉、回复就绪、TTS 准备、首音频、发送音频和总耗时；空转写、拒绝、设备动作、完成、取消、替代和错误回合分别标记。旧 generation 不能覆盖新回合证据。
+- 验证: session 定向 21 passed；Gateway 全量 51 passed；Hermes 插件与安装器 28 passed；compileall、wheel/sdist、diff check 通过。生产升级到 0.3.3，voice canary 返回 141,120 PCM bytes / 8.963 秒；最近会话显示 ASR 286ms、Davie 2,399ms、TTS 1,228ms、首音频 3,927ms、实时发送音频 2,940ms、端点提交后总计 7,130ms。
+- 花费: ¥0；仅使用本地 Fun-ASR、Davie 和 CosyVoice。
+- 边界: 没有把协议 canary 当做人耳证据，没有调用付费模型，没有修改 Davie executor/proactivity。
+- 后续: 优先调查 Davie token stream 与 CosyVoice chunk stream 的首音频流水线；不要继续压缩 900ms 端点静音来换取表面速度。

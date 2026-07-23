@@ -32,6 +32,10 @@ device tokens, and the Hermes API key must never be placed in Git.
   generation is cancelled.
 - ASR quality gating for wake/name-only tails, filler-only input, impossible
   transcript rates, and too-short noise bursts before they can call Davie.
+- Generation-safe per-turn timing for input audio, ASR, Davie/vision, response
+  readiness, TTS synthesis, first audio, streamed audio, and total completion.
+  Empty, rejected, cancelled, superseded, failed, device-action, and completed
+  turns are distinguished instead of being averaged together.
 - Explicit session lifecycle diagnostics plus `Goodbye Davie`/`休息吧`, admin
   sleep, and automatic idle sleep.
 - Official MCP discovery and calls for camera, head motion, LEDs, reminders,
@@ -136,10 +140,13 @@ The official 1.4.3 firmware opens that session on wake, so immediate remote
 speech, vision, and hardware actions require the device to be awake and
 connected. Offline reader loading and persisted checkpoints do not.
 
-`GET /v1/devices` exposes lifecycle, endpoint, transcription-quality, and
-barge-in evidence. Network reachability, a connected WebSocket, or synthetic
-audio is not accepted as proof of human wake-word or audible playback quality.
-After a device disconnects, the same bounded diagnostic summary remains in
+`GET /v1/devices` exposes lifecycle, endpoint, transcription-quality,
+`last_turn_timing`, and barge-in evidence. `first_audio_ms` is measured from
+endpoint commit until the first encoded audio frame is accepted by the device
+transport; `streamed_audio_ms` is media duration, not wall-clock latency.
+Network reachability, a connected WebSocket, or synthetic audio is not accepted
+as proof of human wake-word or audible playback quality. After a device
+disconnects, the same bounded diagnostic summary remains in
 `GET /v1/sessions/recent`; raw audio is never retained.
 
 The camera endpoint follows the official StackChan multipart contract:
