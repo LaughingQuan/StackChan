@@ -16,3 +16,16 @@ target_include_directories(motion_math_test PRIVATE
 target_compile_features(motion_math_test PRIVATE cxx_std_17)
 
 add_test(NAME motion_math_test COMMAND $<TARGET_FILE:motion_math_test>)
+
+add_executable(davie_tf_text_test
+    davie_tf_text_test.cpp
+    ../main/hal/board/davie_tf_text.cc
+)
+
+target_include_directories(davie_tf_text_test PRIVATE
+    ../main
+)
+
+target_compile_features(davie_tf_text_test PRIVATE cxx_std_17)
+
+add_test(NAME davie_tf_text_test COMMAND $<TARGET_FILE:davie_tf_text_test>)

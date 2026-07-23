@@ -1,4 +1,5 @@
 #include "davie_tf_storage.h"
+#include "davie_tf_text.h"
 
 #include <driver/sdspi_host.h>
 #include <esp_log.h>
@@ -10,7 +11,6 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
-#include <algorithm>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -37,37 +37,6 @@ constexpr size_t kMaxDiagnosticDetailBytes = 240;
 constexpr size_t kMaxDiagnostics = 48;
 constexpr size_t kMaxDiagnosticsFileBytes = 24 * 1024;
 
-std::string JsonEscape(const std::string& value)
-{
-    std::string escaped;
-    escaped.reserve(value.size() + 8);
-    for (const char c : value) {
-        switch (c) {
-        case '\\':
-            escaped += "\\\\";
-            break;
-        case '"':
-            escaped += "\\\"";
-            break;
-        case '\n':
-            escaped += "\\n";
-            break;
-        case '\r':
-            escaped += "\\r";
-            break;
-        case '\t':
-            escaped += "\\t";
-            break;
-        default:
-            if (static_cast<unsigned char>(c) >= 0x20) {
-                escaped += c;
-            }
-            break;
-        }
-    }
-    return escaped;
-}
-
 esp_err_t EnsureDirectory(const char* path)
 {
     if (mkdir(path, 0755) == 0 || errno == EEXIST) {
@@ -75,35 +44,6 @@ esp_err_t EnsureDirectory(const char* path)
     }
     ESP_LOGE(kTag, "mkdir %s failed: errno=%d", path, errno);
     return ESP_FAIL;
-}
-
-std::string NormalizeSingleLine(const std::string& value, size_t max_bytes)
-{
-    std::string normalized;
-    normalized.reserve(std::min(value.size(), max_bytes));
-    bool pending_space = false;
-    for (const unsigned char c : value) {
-        if (c < 0x20 || c == 0x7f) {
-            pending_space = !normalized.empty();
-            continue;
-        }
-        if (c == ' ') {
-            pending_space = !normalized.empty();
-            continue;
-        }
-        if (pending_space && normalized.size() < max_bytes) {
-            normalized.push_back(' ');
-        }
-        pending_space = false;
-        if (normalized.size() >= max_bytes) {
-            break;
-        }
-        normalized.push_back(static_cast<char>(c));
-    }
-    while (!normalized.empty() && normalized.back() == ' ') {
-        normalized.pop_back();
-    }
-    return normalized;
 }
 
 std::string RecordText(const std::string& record)
@@ -255,7 +195,7 @@ std::string DavieTfStorage::StatusJson() const
              static_cast<unsigned>(diagnostic_count), checkpoint_present ? "true" : "false");
 
     return std::string("{\"enabled\":true,\"mount_point\":\"") + kMountPoint + "\"," + numeric +
-           ",\"last_error\":\"" + JsonEscape(last_error_) + "\"}";
+           ",\"last_error\":\"" + davie::tf::JsonEscape(last_error_) + "\"}";
 }
 
 std::string DavieTfStorage::SaveNote(const std::string& text)
@@ -267,7 +207,7 @@ std::string DavieTfStorage::SaveNote(const std::string& text)
     if (text.size() > kMaxNoteBytes) {
         return R"({"ok":false,"error":"note_too_long","max_bytes":480})";
     }
-    const std::string normalized = NormalizeSingleLine(text, kMaxNoteBytes);
+    const std::string normalized = davie::tf::NormalizeSingleLineUtf8(text, kMaxNoteBytes);
     if (normalized.empty()) {
         return R"({"ok":false,"error":"note_empty"})";
     }
@@ -281,7 +221,8 @@ std::string DavieTfStorage::SaveNote(const std::string& text)
         return R"({"ok":false,"error":"note_write_failed"})";
     }
     RefreshCapacityLocked();
-    return std::string(R"({"ok":true,"saved":true,"text":")") + JsonEscape(normalized) +
+    return std::string(R"({"ok":true,"saved":true,"text":")") +
+           davie::tf::JsonEscape(normalized) +
            R"(","note_count":)" + std::to_string(CountRecordsLocked(kNotesPath, kMaxNotes)) + "}";
 }
 
@@ -302,7 +243,7 @@ std::string DavieTfStorage::RecentNotesJson(int limit) const
         }
         const std::string& record = records[i - 1];
         json += R"({"created_at":)" + std::to_string(RecordTimestamp(record)) + R"(,"text":")" +
-                JsonEscape(RecordText(record)) + R"("})";
+                davie::tf::JsonEscape(RecordText(record)) + R"("})";
     }
     return json + "],\"note_count\":" + std::to_string(records.size()) + "}";
 }
@@ -317,15 +258,16 @@ std::string DavieTfStorage::SaveReaderCheckpoint(const std::string& title, int i
     if (title.size() > 192 || state.size() > 32 || index < 0 || total < 0 || index > total) {
         return R"({"ok":false,"error":"checkpoint_invalid"})";
     }
-    const std::string clean_title = NormalizeSingleLine(title, 192);
-    const std::string clean_state = NormalizeSingleLine(state, 32);
+    const std::string clean_title = davie::tf::NormalizeSingleLineUtf8(title, 192);
+    const std::string clean_state = davie::tf::NormalizeSingleLineUtf8(state, 32);
     if (clean_title.empty() || clean_state.empty()) {
         return R"({"ok":false,"error":"checkpoint_invalid"})";
     }
     const std::string payload =
-        std::string(R"({"ok":true,"title":")") + JsonEscape(clean_title) + R"(","index":)" +
+        std::string(R"({"ok":true,"title":")") + davie::tf::JsonEscape(clean_title) +
+        R"(","index":)" +
         std::to_string(index) + R"(,"total":)" + std::to_string(total) + R"(,"state":")" +
-        JsonEscape(clean_state) + R"(","updated_at":)" +
+        davie::tf::JsonEscape(clean_state) + R"(","updated_at":)" +
         std::to_string(static_cast<long long>(time(nullptr))) + "}";
     const esp_err_t result = WriteAtomicFileLocked(kReaderCheckpointPath, payload);
     if (result != ESP_OK) {
@@ -361,8 +303,10 @@ std::string DavieTfStorage::AppendDiagnostic(const std::string& event, const std
     if (event.size() > kMaxDiagnosticEventBytes || detail.size() > kMaxDiagnosticDetailBytes) {
         return R"({"ok":false,"error":"diagnostic_too_long"})";
     }
-    const std::string clean_event = NormalizeSingleLine(event, kMaxDiagnosticEventBytes);
-    const std::string clean_detail = NormalizeSingleLine(detail, kMaxDiagnosticDetailBytes);
+    const std::string clean_event =
+        davie::tf::NormalizeSingleLineUtf8(event, kMaxDiagnosticEventBytes);
+    const std::string clean_detail =
+        davie::tf::NormalizeSingleLineUtf8(detail, kMaxDiagnosticDetailBytes);
     if (clean_event.empty()) {
         return R"({"ok":false,"error":"diagnostic_event_empty"})";
     }
@@ -394,7 +338,7 @@ std::string DavieTfStorage::RecentDiagnosticsJson(int limit) const
         }
         const std::string& record = records[i - 1];
         json += R"({"created_at":)" + std::to_string(RecordTimestamp(record)) + R"(,"event":")" +
-                JsonEscape(RecordText(record)) + R"("})";
+                davie::tf::JsonEscape(RecordText(record)) + R"("})";
     }
     return json + "],\"event_count\":" + std::to_string(records.size()) + "}";
 }
