@@ -217,3 +217,19 @@ handoff:
 - 花费: ¥0；没有调用云端或付费模型/API。
 - 边界: 未发送 Telegram/飞书测试消息，未改 Davie executor/proactivity，未记录真实凭据；真人近距离唤醒、真实扬声器听声、摄像头现场画面、舵机/LED 动作与播放中打断仍标记 pending-human。
 - 后续: 用户在设备旁说 `Davie` 建立会话后，按用户指南完成一次六项物理验收；软件实现与生产集成已完成。
+
+### 【完成】Codex 2026-07-24 00:42 Asia/Singapore — truthful live-state reporting
+- 发现: Davie 在没有活动物理会话时只检索 Knowledge Atlas，并把历史能力说明误报成 “Connected/Ready”；Gateway 健康、IP 可达和知识记录都不能证明机器人此刻已醒着。
+- 修复: `stackchan_status` 成为所有 current-state 问题的强制实时工具；回执显式区分 `gateway_reachable`、`active_session`、`no_active_session` 与 `unknown`。Gateway capability manifest 增加唯一的语音会话启动/结束合同，版本统一为 0.3.1。
+- 验证: Gateway 48 passed；Hermes Stack-chan 插件与安装器 28 passed；wheel/sdist 构建通过；生产 Gateway 0.3.1、Hermes 插件和长驻 Gateway 已更新。真实 Davie one-shot 正确回答 “Gateway reachable, no active physical device session”，并给出说 `Davie` 后等待 Listening 的操作。
+- 花费: ¥0；仅调用本地模型进行回放，无云端或付费调用。
+- 边界: 未把协议状态冒充真人唤醒或听声；未修改 Davie executor/proactivity。
+- 后续: 修复唤醒后第一段空转写立即报错的用户体验，并继续调查设备网络抖动。
+
+### 【完成】Codex 2026-07-24 01:08 Asia/Singapore — keep listening after wake-only audio
+- 发现: 唤醒尾音或用户尚未开始讲话时，第一段空转写会立即显示 `I did not catch that`；初版修复又错误使用会话累计空转写次数，可能让一次历史空结果影响后续正常回合。
+- 修复: Gateway 0.3.2 将累计空转写与连续空转写分开。第一次空转写保持 Listening；非实时模式仅连续两次空转写提示重试；任何非空转写都会重置连续计数。诊断状态新增 `consecutive_empty_transcript_count`。
+- 验证: session 定向 20 passed；Gateway 全量 50 passed；Hermes 插件与安装器 28 passed；wheel/sdist 构建通过。生产 lifecycle smoke 通过，完整本地 `hello → STT → Davie → TTS` smoke 返回 227,520 PCM bytes、14.196 秒完成；Rock5B systemd active、health 0.3.2、日志无新异常。
+- 花费: ¥0；完整 smoke 仅调用本地 NVIDIA 媒体服务与本地 Davie。
+- 边界: 0.3.1 运行目录和 systemd 定义已备份到 NAS；未修改凭据、Davie executor/proactivity，未声称真人声学验收通过。
+- 后续: Knowledge Atlas 两份 Stack-chan 能力文档已更新并同步 AnythingLLM；下一轮量化 Wi-Fi 抖动及其对唤醒/首包体验的影响。

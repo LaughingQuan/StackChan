@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stack-chan Davie 可用性 P0 实施报告</title>
+  <style>
+    :root{--ink:#173a32;--muted:#66766f;--paper:#f4eddf;--panel:#fffaf0;--line:#d6c9b1;--accent:#e85b3d;--ok:#1c6a54;--watch:#a66b20}
+    *{box-sizing:border-box}body{margin:0;color:var(--ink);background:linear-gradient(rgba(23,58,50,.045) 1px,transparent 1px),var(--paper);background-size:100% 30px;font:16px/1.65 "Avenir Next","PingFang SC",sans-serif}
+    main{width:min(1100px,calc(100% - 30px));margin:auto;padding:52px 0 90px}header{border-bottom:2px solid var(--ink);padding-bottom:25px}.eyebrow{color:var(--accent);font-weight:800;letter-spacing:.15em;text-transform:uppercase}h1,h2{font-family:Georgia,"Songti SC",serif}h1{font-size:clamp(40px,7vw,72px);line-height:1.02;margin:8px 0 14px}h2{font-size:30px;margin:40px 0 14px}.lead{font-size:18px;color:var(--muted);max-width:850px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.card{background:rgba(255,250,240,.93);border:1px solid var(--line);padding:20px;box-shadow:0 12px 30px rgba(23,58,50,.055)}.card h3{margin:0 0 8px}.tag{display:inline-block;color:#fff;font-size:12px;font-weight:800;letter-spacing:.06em;padding:4px 9px}.ok{background:var(--ok)}.watch{background:var(--watch)}table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{border:1px solid var(--line);padding:12px;text-align:left;vertical-align:top}th{background:#e8ddca}.note{border-left:5px solid var(--accent);background:var(--panel);padding:15px 18px;margin:18px 0}code{background:#e9decb;border-radius:5px;padding:2px 6px;overflow-wrap:anywhere}ul{padding-left:24px}li{margin:7px 0}@media(max-width:720px){.grid{grid-template-columns:1fr}main{padding-top:30px}}
+  </style>
+</head>
+<body><main>
+  <header>
+    <div class="eyebrow">Readiness P0 · 2026-07-24</div>
+    <h1>从“能连上”到<br>真正可维护。</h1>
+    <p class="lead">本轮针对 Stack-chan 看似已经接入、实际却难以稳定交互的问题，补齐唤醒、会话退出、噪声门禁、打断判定、诊断证据和 Davie 工具控制。质量优先，所有结论都区分自动化证据与真人声学验收。</p>
+  </header>
+
+  <h2>为什么之前“不好用”</h2>
+  <div class="grid">
+    <article class="card"><h3>唤醒入口不符合产品要求</h3><p>固件要求完整说出 <code>Hello Davie</code>。短词、语速、口音和环境噪声都会影响较长命令的命中，用户期望的直接 “Davie” 并未真正部署。</p></article>
+    <article class="card"><h3>会话没有自然结束</h3><p>设备一旦进入 Listening，自定义唤醒检测会暂停；旧会话没有空闲超时和语音退出，因此看起来像唤醒失灵，实质可能仍卡在旧会话。</p></article>
+    <article class="card"><h3>噪声也会触发打断</h3><p>过去 120ms 的短噪声就可能取消正在说话的 generation，且无效音频可能一直等到最长回合；这会造成停播、等待和重复取消。</p></article>
+    <article class="card"><h3>ASR 错误直接进入 Davie</h3><p>纯名字重复、唤醒尾音、填充词和不可能语速的幻觉缺少前置门禁，会浪费模型时间，也让用户看到“不相关回复”。</p></article>
+    <article class="card"><h3>断线后证据消失</h3><p>连接断开后设备会从在线列表消失，无法判断是 no-speech、ASR 拒绝、误打断、自动休眠还是正常关闭。</p></article>
+    <article class="card"><h3>插件代码更新不等于运行时生效</h3><p>Davie 工具插件已安装，但长驻 Hermes Gateway 必须重启后才会加载新的 sleep 能力；本轮把“源码、安装副本、运行时”分别验收。</p></article>
+  </div>
+
+  <h2>本轮已经实现</h2>
+  <table>
+    <thead><tr><th>能力</th><th>实现</th><th>验证状态</th></tr></thead>
+    <tbody>
+      <tr><td>直接唤醒</td><td>唯一命令改为 <code>DAVIE</code>，保留官方 MultiNet5 English Q8；固件已构建、备份和刷入，启动日志确认注册为 <code>D d V m</code>。</td><td><span class="ok tag">LOADED</span></td></tr>
+      <tr><td>会话生命周期</td><td><code>connecting / ready / listening / transcribing / thinking / speaking / sleeping / closed</code>，记录时间、原因和 close reason。</td><td><span class="ok tag">50 TESTS</span></td></tr>
+      <tr><td>休眠与退出</td><td>支持 “Goodbye Davie / Go to sleep / 休息吧”、受认证管理 API，以及默认 120 秒无活动自动休眠。</td><td><span class="ok tag">LIVE SMOKE</span></td></tr>
+      <tr><td>打断</td><td>短声先成为 possible speech；只有累计 360ms 有效人声或完整用户回合才确认打断，随后取消旧 generation。</td><td><span class="ok tag">CONTRACT PASS</span></td></tr>
+      <tr><td>ASR 质量门禁</td><td>保留采集时长、有效语音、RMS、语言和 CTC；过滤纯唤醒、名字重复、纯 filler 和异常语速。</td><td><span class="ok tag">UNIT PASS</span></td></tr>
+      <tr><td>唤醒后自然开口</td><td>第一次空转写保持 Listening；只有非实时模式连续两次空转写才提示重试，非空转写会重置连续计数。</td><td><span class="ok tag">REGRESSION PASS</span></td></tr>
+      <tr><td>可观察性</td><td>在线状态和最近 20 个已关闭会话均可查；仅保存结构化摘要，不保存原始音频。</td><td><span class="ok tag">PRODUCTION</span></td></tr>
+      <tr><td>Davie 工具</td><td><code>stackchan_status</code> 区分 Gateway、物理设备会话与未知状态；<code>stackchan_control(action="sleep")</code> 可从 Telegram、飞书、Web/CLI 关闭语音会话。</td><td><span class="ok tag">LIVE</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2>验证证据</h2>
+  <ul>
+    <li>Gateway 自动化回归：50 项通过；Hermes Stack-chan 插件与安装器：28 项通过。</li>
+    <li>完整本地语音协议 smoke：<code>hello → STT → LLM → TTS</code> 通过，得到 227,520 bytes PCM，约 14.196 秒完成。</li>
+    <li>生命周期 smoke：ready 状态、管理员 sleep、设备 Sleeping 事件和 WebSocket 关闭全部通过。</li>
+    <li>固件 host test：1/1；ESP-IDF 5.5.4 全量构建通过，应用镜像 4,407,248 bytes，分区保留 15%。</li>
+    <li>设备启动：固件 1.4.3、16MB Flash、8MB PSRAM、摄像头、触摸、RTC、IMU、舵机、双工音频、Wi-Fi 与本地 Gateway 全部初始化成功。</li>
+    <li>生产 Gateway 已升级到 <code>0.3.2</code>；Davie 自然语言回放会先查实时状态，并能正确区分“Gateway 可达”与“设备无活动会话”。</li>
+    <li>NAS 恢复性：原厂 1.4.4、接入前完整镜像、能力增强前镜像和本次刷写前 NVS 均有 SHA-256 校验。</li>
+  </ul>
+
+  <div class="note"><strong>未伪造的真人验收：</strong>启动日志证明 “Davie” 命令已真正加载，但仍需在设备实际摆放位置测试近场/远场唤醒率、环境噪声误唤醒、Davie 播放时真人插话、中文/英文自然讲话和人耳音质。这些结果不能由网络 smoke 或合成 fixture 代替。</div>
+
+  <h2>状态判断规则</h2>
+  <p>Knowledge Atlas 记录的是能力、操作方法和历史证据，不代表机器人此刻在线。Davie 在回答“现在能不能用、是否已连接、是否醒着”之前必须调用 <code>stackchan_status</code>。结果中的 <code>gateway_reachable</code> 只证明桥接服务可达；只有 <code>live_state.physical_device_session_active=true</code> 才证明当前存在物理设备会话。人耳是否听到声音仍必须由真人确认。</p>
+
+  <h2>现在怎么用</h2>
+  <ol>
+    <li>设备空闲时直接说 <strong>“Davie”</strong>，看到 Listening 后再说完整需求。</li>
+    <li>同一会话中直接追问或打断，不要每句话重复唤醒词。</li>
+    <li>结束时说 <strong>“Goodbye Davie”</strong>、<strong>“Go to sleep”</strong> 或 <strong>“休息吧”</strong>；不使用约两分钟后也会自动休眠。</li>
+    <li>若没有响应，先检查屏幕状态；维护端再查看在线设备与最近会话证据，区分唤醒、音频、ASR、模型和 TTS。</li>
+  </ol>
+
+  <h2>后续验收顺序</h2>
+  <ol>
+    <li>真人分别在 0.5m、1m、2m 说 “Davie”，每档 10 次，记录命中、误触发和响应时间。</li>
+    <li>说完整普通问题，确认 ASR、Davie 回复和人耳播放。</li>
+    <li>播放中先制造短噪声，再真人持续讲话，确认只有后者触发打断。</li>
+    <li>结束会话后再次说 “Davie”，确认可重复唤醒；再测试自动休眠后的重新唤醒。</li>
+    <li>视觉、伴读暂停/继续、提醒、音量、头部和 LED 按既有能力矩阵复测。</li>
+  </ol>
+</main></body>
+</html>

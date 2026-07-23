@@ -1,6 +1,6 @@
 [project]
 name = "stackchan-davie-gateway"
-version = "0.3.1"
+version = "0.3.2"
 description = "Local Xiaozhi-compatible voice gateway for StackChan and Davie"
 requires-python = ">=3.11"
 dependencies = [

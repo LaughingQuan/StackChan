@@ -70,6 +70,15 @@ class EmptyMedia(FakeMedia):
         return ""
 
 
+class SequenceMedia(FakeMedia):
+    def __init__(self, transcripts: list[str]):
+        self.transcripts = transcripts
+
+    async def transcribe(self, _wav: bytes, *, hotwords: list[str]) -> str:
+        assert self.transcripts
+        return self.transcripts.pop(0)
+
+
 class SleepMedia(FakeMedia):
     async def transcribe(self, _wav: bytes, *, hotwords: list[str]) -> str:
         return "Goodbye Davie"
@@ -151,7 +160,81 @@ async def test_realtime_empty_transcript_keeps_listening_without_failure_alert()
     await asyncio.wait_for(session.response_task, timeout=2)
     assert session.listening is True
     assert session.empty_transcript_count == 1
+    assert session.consecutive_empty_transcript_count == 1
     assert session.last_error == "asr_empty_transcript"
+    assert session.state == "listening"
+    assert not any(item.get("type") == "alert" for item in transport.json)
+    await session.close()
+
+
+async def test_first_auto_empty_transcript_stays_listening_then_repeated_empty_prompts() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=EmptyMedia(),
+        davie=NoDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    await session.handle_text('{"type":"listen","state":"start","mode":"auto"}')
+
+    await session._process_turn(_pcm_frame(1800))
+
+    assert session.empty_transcript_count == 1
+    assert session.consecutive_empty_transcript_count == 1
+    assert session.state == "listening"
+    assert not any(item.get("type") == "alert" for item in transport.json)
+
+    await session._process_turn(_pcm_frame(1800))
+
+    alerts = [item for item in transport.json if item.get("type") == "alert"]
+    assert session.empty_transcript_count == 2
+    assert session.consecutive_empty_transcript_count == 2
+    assert session.state == "listening"
+    assert alerts == [
+        {
+            "session_id": session.session_id,
+            "type": "alert",
+            "status": "Listening",
+            "message": "I did not catch that. Please try again.",
+            "emotion": "neutral",
+        }
+    ]
+    await session.close()
+
+
+async def test_valid_turn_resets_consecutive_empty_transcript_prompting() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=SequenceMedia(["", "Hello Davie", ""]),
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    await session.handle_text('{"type":"listen","state":"start","mode":"auto"}')
+
+    await session._process_turn(_pcm_frame(1800))
+    await session._process_turn(_pcm_frame(1800))
+    await session._process_turn(_pcm_frame(1800))
+
+    assert session.accepted_turn_count == 1
+    assert session.empty_transcript_count == 2
+    assert session.consecutive_empty_transcript_count == 1
     assert not any(item.get("type") == "alert" for item in transport.json)
     await session.close()
 

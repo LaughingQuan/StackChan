@@ -112,6 +112,7 @@ class StackChanSession:
         self.turn_count = 0
         self.accepted_turn_count = 0
         self.empty_transcript_count = 0
+        self.consecutive_empty_transcript_count = 0
         self.rejected_transcript_count = 0
         self.dropped_turn_count = 0
         self.last_rejected_transcript = ""
@@ -410,12 +411,18 @@ class StackChanSession:
             }
             if not transcript:
                 self.empty_transcript_count += 1
+                self.consecutive_empty_transcript_count += 1
                 self.rejected_transcript_count += 1
                 self.last_error = "asr_empty_transcript"
+                self._set_state("listening")
                 # Realtime audio can contain a wake chime tail or a short burst
-                # of ambient noise. Keep listening instead of replacing the UI
-                # with a misleading failure message.
-                if self.listen_mode != "realtime":
+                # of ambient noise. The first empty turn after wake is not a
+                # user error: keep Listening so the person can start naturally.
+                # Repeated empty turns in non-realtime mode still get feedback.
+                if (
+                    self.listen_mode != "realtime"
+                    and self.consecutive_empty_transcript_count > 1
+                ):
                     await self.transport.send_json(
                         {
                             "session_id": self.session_id,
@@ -426,10 +433,12 @@ class StackChanSession:
                         }
                     )
                 return
+            self.consecutive_empty_transcript_count = 0
             if not quality["accepted"]:
                 self.rejected_transcript_count += 1
                 self.last_rejected_transcript = transcript[:240]
                 self.last_error = f"asr_rejected_{quality['reason']}"
+                self._set_state("listening")
                 return
             self.last_transcript = transcript
             self.accepted_turn_count += 1
@@ -1011,6 +1020,7 @@ class StackChanSession:
             "turn_count": self.turn_count,
             "accepted_turn_count": self.accepted_turn_count,
             "empty_transcript_count": self.empty_transcript_count,
+            "consecutive_empty_transcript_count": self.consecutive_empty_transcript_count,
             "rejected_transcript_count": self.rejected_transcript_count,
             "dropped_turn_count": self.dropped_turn_count,
             "interrupt_count": self.interrupt_count,
