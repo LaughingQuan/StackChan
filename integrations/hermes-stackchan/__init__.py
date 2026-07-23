@@ -6,6 +6,9 @@ import asyncio
 import json
 import re
 import sys
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +34,10 @@ _CURRENT_STATE_REQUEST_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+_LIVE_STATE_RESPONSE_TTL_SECONDS = 30.0
+_LIVE_STATE_RESPONSE_LIMIT = 64
+_LIVE_STATE_RESPONSES: OrderedDict[str, tuple[float, str]] = OrderedDict()
+_LIVE_STATE_RESPONSES_LOCK = threading.Lock()
 
 
 STATUS_SCHEMA = {
@@ -372,6 +379,44 @@ def _live_state_evidence() -> dict[str, Any]:
         return exc.as_dict()
 
 
+def _remember_live_state_response(session_id: str, response: str) -> None:
+    key = session_id.strip()
+    if not key:
+        return
+    now = time.monotonic()
+    with _LIVE_STATE_RESPONSES_LOCK:
+        stale = [
+            item_key
+            for item_key, (created_at, _) in _LIVE_STATE_RESPONSES.items()
+            if now - created_at > _LIVE_STATE_RESPONSE_TTL_SECONDS
+        ]
+        for item_key in stale:
+            _LIVE_STATE_RESPONSES.pop(item_key, None)
+        _LIVE_STATE_RESPONSES[key] = (now, response)
+        _LIVE_STATE_RESPONSES.move_to_end(key)
+        while len(_LIVE_STATE_RESPONSES) > _LIVE_STATE_RESPONSE_LIMIT:
+            _LIVE_STATE_RESPONSES.popitem(last=False)
+
+
+def _replace_live_state_response(
+    *,
+    session_id: str = "",
+    **_kwargs: Any,
+) -> str | None:
+    key = session_id.strip()
+    if not key:
+        return None
+    now = time.monotonic()
+    with _LIVE_STATE_RESPONSES_LOCK:
+        cached = _LIVE_STATE_RESPONSES.pop(key, None)
+    if cached is None:
+        return None
+    created_at, response = cached
+    if now - created_at > _LIVE_STATE_RESPONSE_TTL_SECONDS:
+        return None
+    return response
+
+
 def _send_gateway_text(gateway: Any, event: Any, text: str) -> bool:
     source = getattr(event, "source", None)
     if source is None:
@@ -424,6 +469,7 @@ def stackchan_pre_llm_hint(**kwargs: Any) -> dict[str, Any] | None:
         evidence,
         chinese=bool(re.search(r"[\u3400-\u9fff]", user_message)),
     )
+    _remember_live_state_response(str(kwargs.get("session_id") or ""), exact_response)
 
     live_state = evidence.get("live_state")
     if not isinstance(live_state, dict):
@@ -471,6 +517,10 @@ def register(ctx: Any) -> None:
         )
     try:
         ctx.register_hook("pre_llm_call", stackchan_pre_llm_hint)
+    except (AttributeError, TypeError):
+        pass
+    try:
+        ctx.register_hook("transform_llm_output", _replace_live_state_response)
     except (AttributeError, TypeError):
         pass
     try:

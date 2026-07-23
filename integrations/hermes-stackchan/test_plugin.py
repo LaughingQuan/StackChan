@@ -700,6 +700,63 @@ def test_live_state_hook_reports_no_session_without_claiming_offline(gateway, mo
     assert len(hint["context"].encode("utf-8")) <= 1536
 
 
+def test_live_state_output_is_replaced_once_with_authenticated_answer(gateway, monkeypatch):
+    _GatewayHandler.devices = []
+    monkeypatch.setattr(
+        plugin_module,
+        "_config",
+        lambda: plugin_module.StackChanConfig.load(gateway),
+    )
+
+    hint = plugin_module.stackchan_pre_llm_hint(
+        session_id="live-state-output-session",
+        user_message="请检查桌面机器人当前状态，黑屏是不是离线？",
+    )
+    first = plugin_module._replace_live_state_response(
+        session_id="live-state-output-session",
+        response_text="极大概率只是休眠。",
+    )
+    second = plugin_module._replace_live_state_response(
+        session_id="live-state-output-session",
+        response_text="should not be replaced again",
+    )
+
+    assert hint is not None
+    assert first is not None
+    assert "当前没有活动物理会话" in first
+    assert "黑屏可能只是正常息屏，不能单独作为离线证据" in first
+    assert "极大概率" not in first
+    assert second is None
+
+
+def test_live_state_output_replacement_is_session_scoped(gateway, monkeypatch):
+    monkeypatch.setattr(
+        plugin_module,
+        "_config",
+        lambda: plugin_module.StackChanConfig.load(gateway),
+    )
+
+    plugin_module.stackchan_pre_llm_hint(
+        session_id="live-state-owner-session",
+        user_message="Is the desktop robot online now?",
+    )
+
+    assert (
+        plugin_module._replace_live_state_response(
+            session_id="different-session",
+            response_text="unrelated response",
+        )
+        is None
+    )
+    assert (
+        plugin_module._replace_live_state_response(
+            session_id="live-state-owner-session",
+            response_text="model paraphrase",
+        )
+        is not None
+    )
+
+
 @pytest.mark.parametrize(
     "message",
     [
@@ -800,6 +857,7 @@ def test_plugin_registers_status_speech_and_vision_tools():
     hooks = [item[1] for item in calls if item[0] == "hook"]
     assert hooks == [
         ("pre_llm_call", plugin_module.stackchan_pre_llm_hint),
+        ("transform_llm_output", plugin_module._replace_live_state_response),
         (
             "pre_gateway_dispatch",
             plugin_module._handle_current_state_pre_gateway_dispatch,
