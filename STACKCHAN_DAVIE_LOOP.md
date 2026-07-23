@@ -287,3 +287,22 @@ handoff:
 - 花费: ¥0；没有调用付费或云端模型/API。
 - 边界: 日志和代码不能替代真人看到屏幕、实际点按、近场唤醒及人耳听声；这些仍需用户在设备旁最终确认。没有修改 Davie executor/proactivity，也没有降低唤醒阈值。
 - 后续: 发布 Gateway/插件合同，更新人类可读 Knowledge Atlas 使用指南，并执行生产服务、协议、媒体和设备深度回归。
+
+### 【完成】Codex 2026-07-24 05:55 Asia/Singapore — P4 production interaction and truthful live state
+- 发现: 设备能力说明、Gateway 状态和物理设备会话过去容易被模型混在一起；知识库历史不能证明机器人现在在线。Web/CLI 即使收到“逐字返回”提示，本地模型仍可能把“黑屏可能是息屏”改写成概率判断。状态路径如果仍读取完整 capability manifest，也会浪费一次无关 HTTP 请求。
+- 修复: Telegram/飞书的明确实时状态问题由 `pre_gateway_dispatch` 在调用模型前直接回答；Web/CLI 使用带 30 秒 TTL、最多 64 会话、读取后即删除的认证答案缓存，在 `transform_llm_output` 阶段逐字替换模型改写。状态 fast path 不再下载 capability manifest；完整能力查询仍按需保留。插件 manifest 补齐 `stackchan_storage` 与三个运行时 hook。
+- 验证: Hermes 插件 `44 passed`；真实 CLI 回合返回认证原文，不再出现“极大概率”或 Docker/Rock5B-body 幻觉；Knowledge 与 Solution SSE 重启后均为 `connected`。插件源码和安装副本逐文件一致，Gateway PID 受控切换且 Hermes 0.18.2 health OK。
+- 花费: ¥0；没有调用付费或云端模型/API。
+- 边界: Telegram/飞书可完全跳过模型；CLI/Web 的核心 Agent 仍会运行一次后再被认证答案替换，因此答案准确但 CLI 实测仍约 7 秒。若 Hermes 未来开放通用 API/Web pre-dispatch direct-response，可再去掉这次模型调用，不应修改 Davie executor 来实现。
+
+### 【完成】Codex 2026-07-24 06:42 Asia/Singapore — P5 UTF-safe storage and deep regression
+- 发现: TF 短笔记原先按原始字节截断，极端情况下可能切开中文或 Emoji；备份清单还错误地把 `SHA256SUMS` 自身纳入哈希，产生一个假失败。最终回归时机器人本体网络 5/5 不可达且没有 USB 串口，不能继续刷写或伪造真人验收。
+- 修复: 抽出无 ESP 依赖的 UTF-8 单行规范化与 JSON escape 模块，非法序列安全跳过，截断只发生在完整 code point 边界；新增中英文、Emoji、非法 UTF-8、空白和 JSON 单测。重建备份清单时排除自身。完成 TF 创意使用指南、操作边界和最终 HTML 报告。
+- 验证: Gateway `62 passed`、Hermes 插件 `44 passed`、固件 host `2/2 passed`；两套 compileall 与 fatal Ruff 门禁、`git diff --check`、wheel/sdist 全部通过。ESP-IDF 5.5.4 完整 reconfigure/build 通过，app `0x444400`、14% free；最终固件 SHA-256 `ff8644cb771183d11d86f4b76a3b1d6f1741d0a0be17ac646269e11788eccf86`；分区表与物理 3 KiB 备份逐字节一致，NAS full flash/NVS/分区/候选镜像全部校验通过。生产 lifecycle smoke 与本地 `hello → STT → LLM → TTS` 通过，后者返回 285,120 bytes PCM。
+- 花费: ¥0；全部使用本地服务。
+- 边界: 此前真机已证明 TF 14,895 MiB 可写、8 个 storage MCP 与屏幕/触控/摄像头/音频/Wi-Fi/唤醒同时工作；本轮最终 UTF-8 加固因设备不在线尚未刷入。真人唤醒、点脸、人耳音质、房间噪声和真实打断仍是 pending-human。
+
+### 【完成】Codex 2026-07-24 06:50 Asia/Singapore — TF storage and interaction loop closed
+- 完成: P1 可选 TF 基础、P2 有界边缘记忆、P3 语音/触控双入口、P4 可信实时状态与性能 fast path、P5 UTF-8 加固与深度回归全部完成；源代码、安装插件、生产 Gateway、HTML 指南和 Knowledge Atlas 同步进入收尾。
+- 发布状态: Stack-chan Gateway 0.4.3、Hermes 插件 0.2.0；最终固件和恢复备份均已生成并校验。机器人重新在线后仅需刷最终 app 镜像并执行文档中的真人验收，不需要重新设计或重做 TF 功能。
+- 命门: 没有修改 Davie executor/proactivity；没有格式化 TF；没有保存 Wi-Fi 密码、token、原始音频或整本书；没有把协议 smoke 冒充真人体验。

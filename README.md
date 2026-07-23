@@ -33,7 +33,9 @@ mounts it at `/tf` without auto-formatting and exposes bounded local notes,
 one reader checkpoint, and a rolling diagnostic log. It never stores
 credentials or continuous microphone audio. Gateway reader state remains the
 authoritative long-form reading record; the TF checkpoint is a device-side
-recovery copy.
+recovery copy. Notes are normalized and truncated only at complete UTF-8
+boundaries, so Chinese text and emoji cannot be persisted as broken byte
+sequences.
 
 The Davie build is voice-first. When no explicit device preference exists it
 boots directly into the official AI Agent. Say `Davie` once while the device is
@@ -43,6 +45,13 @@ the same local voice session without waiting for ASR. Empty realtime ASR
 results are ignored so a wake chime tail or a short noise burst does not replace
 `Listening...` with a false failure message. The official launcher and Settings
 remain available; the Settings switch is still the authoritative user override.
+
+Current-state questions are handled differently from capability questions.
+Telegram and Feishu receive an authenticated local answer before any model is
+called. Web/CLI turns use the same evidence and replace model paraphrases with
+the exact bounded answer once per session. This prevents a reachable Gateway
+or a dark display from being misreported as proof that the physical robot is
+online or offline.
 
 <img src="https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1205/K151_stack_chan_main_pictures_01.webp" width="60%">
 

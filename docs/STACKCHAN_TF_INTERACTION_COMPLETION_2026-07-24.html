@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Stack-chan Davie TF 与交互循环完成报告</title>
+  <style>
+    :root{--ink:#173b34;--muted:#68776f;--paper:#f5eedf;--panel:#fffaf1;--line:#d8cab1;--accent:#e65c3d;--ok:#1c6a53;--watch:#a16b24}
+    *{box-sizing:border-box}body{margin:0;color:var(--ink);background:linear-gradient(rgba(23,59,52,.045) 1px,transparent 1px),var(--paper);background-size:100% 30px;font:16px/1.65 "Avenir Next","PingFang SC",sans-serif}
+    main{width:min(1120px,calc(100% - 30px));margin:auto;padding:52px 0 92px}header{border-bottom:2px solid var(--ink);padding-bottom:24px}.eyebrow{color:var(--accent);font-weight:800;letter-spacing:.14em}h1,h2{font-family:Georgia,"Songti SC",serif}h1{font-size:clamp(40px,7vw,72px);line-height:1.02;margin:8px 0 14px}h2{font-size:30px;margin:40px 0 14px}.lead{font-size:18px;color:var(--muted);max-width:860px}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:15px}.card{background:rgba(255,250,241,.94);border:1px solid var(--line);padding:20px;box-shadow:0 12px 30px rgba(23,59,52,.055)}.card h3{margin:0 0 8px}.tag{display:inline-block;color:#fff;font-size:12px;font-weight:800;letter-spacing:.06em;padding:4px 9px}.ok{background:var(--ok)}.watch{background:var(--watch)}table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{border:1px solid var(--line);padding:12px;text-align:left;vertical-align:top}th{background:#e8ddc9}.note{border-left:5px solid var(--accent);background:var(--panel);padding:15px 18px;margin:18px 0}code{background:#e9deca;border-radius:5px;padding:2px 6px;overflow-wrap:anywhere}li{margin:7px 0}@media(max-width:720px){.grid{grid-template-columns:1fr}main{padding-top:30px}}
+  </style>
+</head>
+<body><main>
+  <header>
+    <div class="eyebrow">IMPLEMENTATION COMPLETION · 2026-07-24</div>
+    <h1>TF 是边缘记忆，<br>交互不再只有一条路。</h1>
+    <p class="lead">本轮以官方 StackChan 1.4.3 为硬件与 UI 基线，启用可选 TF 卡、有限边缘记忆、伴读恢复、诊断黑匣子、触控兜底和可信实时状态。所有能力保持解耦：无卡仍能对话，无模型也能查状态，设备离线不会被伪装成在线。</p>
+  </header>
+
+  <h2>最终能力</h2>
+  <table>
+    <thead><tr><th>能力</th><th>实现方式</th><th>状态</th></tr></thead>
+    <tbody>
+      <tr><td>可选 TF 存储</td><td>共享 SPI 总线安全挂载到 <code>/tf</code>，禁止自动格式化；启动执行 tiny write/read/delete 自检。</td><td><span class="ok tag">PHYSICAL PASS</span></td></tr>
+      <tr><td>短笔记</td><td>最多 32 条、每条 480 UTF-8 bytes；原子写入与轮转，中文和 Emoji 只在完整字符边界处理。</td><td><span class="ok tag">UNIT PASS</span></td></tr>
+      <tr><td>伴读恢复</td><td>TF 仅镜像一份当前书籍断点；Gateway 继续保存完整内容和权威进度。</td><td><span class="ok tag">CONTRACT PASS</span></td></tr>
+      <tr><td>诊断黑匣子</td><td>最多 48 条小型结构化事件，容量有界，不存连续录音和凭据。</td><td><span class="ok tag">BOUNDED</span></td></tr>
+      <tr><td>语音与触控双入口</td><td>空闲时说 “Davie”；漏检时点脸开始同一官方 AI Agent 会话，屏幕显示明确提示。</td><td><span class="watch tag">HUMAN CHECK</span></td></tr>
+      <tr><td>可信实时状态</td><td>状态问题按需查询；Telegram/飞书模型前直答，Web/CLI 一次性替换模型改写，不持续轮询。</td><td><span class="ok tag">LIVE PASS</span></td></tr>
+      <tr><td>流式本地语音</td><td>本地 ASR、Davie SSE 与逐句 TTS 预取；generation 取消后拒绝旧音频。</td><td><span class="ok tag">PROTOCOL PASS</span></td></tr>
+      <tr><td>优雅降级</td><td>无卡只关闭边缘存储；无活动设备会话只拒绝即时硬件动作；Gateway 与长期知识仍独立工作。</td><td><span class="ok tag">TESTED</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2>为什么这样设计</h2>
+  <div class="grid">
+    <article class="card"><h3>不把 TF 当 NAS</h3><p>ESP32 适合小而确定的数据，不适合复制整本书、长期知识库或原始音频。权威资料仍留在 Gateway、Atlas 与 NAS。</p></article>
+    <article class="card"><h3>不让模型决定设备事实</h3><p>机器人是否有活动会话来自认证设备列表，而不是模型推断。黑屏和 Gateway 健康都不是物理在线证明。</p></article>
+    <article class="card"><h3>不为唤醒率牺牲误触发</h3><p>保留官方 MultiNet5 的 “Davie” 唤醒，增加点脸兜底；没有继续降低阈值去换取表面命中率。</p></article>
+    <article class="card"><h3>不让新能力拖慢首音频</h3><p>TF 写入、状态帮助和能力说明走确定性路径；复杂问答才进入 Davie，诊断与断点不进入首音频关键路径。</p></article>
+  </div>
+
+  <h2>深度验证</h2>
+  <ul>
+    <li>Gateway：<code>62 passed</code>；compileall、fatal Ruff 门禁、wheel 与 sdist 构建通过。</li>
+    <li>Hermes 插件：<code>44 passed</code>；覆盖状态隔离、一次性认证输出、TF 边界、工具注册与 manifest 一致性。</li>
+    <li>固件 host：<code>2/2 passed</code>，包括运动数学与 UTF-8/JSON 边缘文本。</li>
+    <li>ESP-IDF 5.5.4 完整 reconfigure/build 通过；镜像 <code>0x444400</code>，应用分区保留 14%。</li>
+    <li>最终固件 SHA-256：<code>ff8644cb771183d11d86f4b76a3b1d6f1741d0a0be17ac646269e11788eccf86</code>。</li>
+    <li>分区表与刷写前 3 KiB 物理备份逐字节一致；NAS full flash、NVS、分区表与候选镜像哈希全部通过。</li>
+    <li>生产生命周期 smoke：handshake、ready、sleep receipt、Sleeping 事件和连接关闭全部通过。</li>
+    <li>生产本地语音 smoke：<code>hello → STT → LLM → TTS</code> 通过，返回 285,120 bytes PCM，19.636 秒完成。</li>
+    <li>Hermes 0.18.2、Knowledge Atlas、Stack-chan Gateway 0.4.3 和 NVIDIA media gateway 均健康；Knowledge 与 Solution SSE 均 connected。</li>
+  </ul>
+
+  <div class="note"><strong>此前真机证据：</strong>16GB TF 实卡被识别为 14,895 MiB 且可写；8 个存储 MCP、屏幕、触控、摄像头、音频、Wi-Fi 与唤醒模型同时初始化，无 panic/reboot。FAT 8.3 临时文件问题已由真机发现并修复。</div>
+  <div class="note"><strong>本轮最终边界：</strong>收尾时机器人本体不响应网络且没有 USB 串口，因此不能刷入最后一版 UTF-8 加固，也不能宣称真人唤醒、点脸、人耳播放和房间噪声已最终通过。此前已刷固件仍包含 TF、笔记、断点、诊断和触控能力；待设备重新在线后只需刷最终 app 镜像并做现场验收。</div>
+
+  <h2>明天怎么验收</h2>
+  <ol>
+    <li>接通设备，确认空闲屏幕显示 <code>Say "Davie" or tap me</code>；若黑屏先点脸。</li>
+    <li>点脸后确认 <code>Listening...</code>，说一句普通问题，听到完整回复后说 “Goodbye Davie”。</li>
+    <li>重新空闲后，在 0.5m、1m、2m 各说 “Davie” 10 次，记录命中率和误唤醒。</li>
+    <li>说“记住：周五回复 I-TIM ✅”，再让它读最近笔记并查询 TF 状态。</li>
+    <li>装载一段英文文章，测试 play、pause、resume；重启会话后确认当前句与断点恢复。</li>
+    <li>播放回复时制造短噪声，再真人持续讲话；确认只有后者触发打断且上下文延续。</li>
+  </ol>
+</main></body>
+</html>
