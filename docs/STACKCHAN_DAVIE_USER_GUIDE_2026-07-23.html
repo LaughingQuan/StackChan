@@ -13,15 +13,15 @@
 <body><main>
   <header>
     <div class="eyebrow">DAVIE DESKTOP BODY · QUICK GUIDE</div>
-    <h1>不用找菜单，<br>直接叫 Davie。</h1>
+    <h1>不用找菜单，<br>说 Hello Davie。</h1>
     <p class="lead">Stack-chan 是 Davie 的本地耳朵、摄像头、声音、表情和可转动的头。开机联网后，日常操作以语音为主；官方 Launcher 和 Settings 仍然保留。</p>
   </header>
 
   <h2>基本交互</h2>
   <div class="grid">
-    <article class="card"><strong>1 · 唤醒</strong><span class="voice">“Davie”</span><br>看到进入 Listening 后再说完整需求。</article>
-    <article class="card"><strong>2 · 对话</strong><span class="voice">“How is the weather today?”</span><br>Davie 会延续同一设备会话的上下文与记忆。</article>
-    <article class="card"><strong>3 · 看东西</strong><span class="voice">“Davie, what do you see?”</span><br>摄像头真正拍照后才进行解释，不会假装看见。</article>
+    <article class="card"><strong>1 · 空闲时唤醒</strong><span class="voice">“Hello Davie”</span><br>看到屏幕进入 Listening 后再说完整需求。</article>
+    <article class="card"><strong>2 · 持续对话</strong><span class="voice">“How is the weather today?”</span><br>Listening 状态下直接讲话，不必再次说唤醒词；Davie 会延续同一设备会话。</article>
+    <article class="card"><strong>3 · 看东西</strong><span class="voice">“What do you see?”</span><br>摄像头真正拍照后才进行解释，不会假装看见。</article>
     <article class="card"><strong>4 · 打断</strong>在 Davie 说话时直接讲话。旧语音会被取消，新问题会进入同一上下文。</article>
   </div>
 
@@ -29,16 +29,16 @@
   <table>
     <thead><tr><th>想做什么</th><th>可以这样说</th><th>行为</th></tr></thead>
     <tbody>
-      <tr><td>查看能力</td><td class="voice">Davie, what can you do?</td><td>本地立即回答，不调用大模型。</td></tr>
-      <tr><td>看并解释</td><td class="voice">Davie, look at this and explain it.</td><td>拍照、视觉理解、语音回答。</td></tr>
-      <tr><td>继续伴读</td><td class="voice">Davie, continue reading.</td><td>从断点继续；被打断的当前句会重读。</td></tr>
-      <tr><td>暂停伴读</td><td class="voice">Davie, pause reading.</td><td>立即暂停并保存进度。</td></tr>
-      <tr><td>停止伴读</td><td class="voice">Davie, stop reading.</td><td>停止并把下一次起点重置到开头。</td></tr>
-      <tr><td>查询进度</td><td class="voice">Davie, where did we stop in the book?</td><td>说出书名与大致进度。</td></tr>
-      <tr><td>提醒</td><td class="voice">Davie, remind me in ten minutes to take a break.</td><td>在设备本地创建提醒。</td></tr>
-      <tr><td>音量</td><td class="voice">Davie, set the volume to 45.</td><td>只有设备确认成功后才回答完成。</td></tr>
-      <tr><td>动作</td><td class="voice">Davie, turn your head left.</td><td>控制头部向左、右、上或回正。</td></tr>
-      <tr><td>灯光</td><td class="voice">Davie, set the LED to blue.</td><td>控制机身 LED 红、绿、蓝、白或关闭。</td></tr>
+      <tr><td>查看能力</td><td class="voice">What can you do?</td><td>本地立即回答，不调用大模型。</td></tr>
+      <tr><td>看并解释</td><td class="voice">Look at this and explain it.</td><td>拍照、视觉理解、语音回答。</td></tr>
+      <tr><td>继续伴读</td><td class="voice">Continue reading.</td><td>从断点继续；被打断的当前句会重读。</td></tr>
+      <tr><td>暂停伴读</td><td class="voice">Pause reading.</td><td>立即暂停并保存进度。</td></tr>
+      <tr><td>停止伴读</td><td class="voice">Stop reading.</td><td>停止并把下一次起点重置到开头。</td></tr>
+      <tr><td>查询进度</td><td class="voice">Where did we stop in the book?</td><td>说出书名与大致进度。</td></tr>
+      <tr><td>提醒</td><td class="voice">Remind me in ten minutes to take a break.</td><td>在设备本地创建提醒。</td></tr>
+      <tr><td>音量</td><td class="voice">Set the volume to 45.</td><td>只有设备确认成功后才回答完成。</td></tr>
+      <tr><td>动作</td><td class="voice">Turn your head left.</td><td>控制头部向左、右、上或回正。</td></tr>
+      <tr><td>灯光</td><td class="voice">Set the LED to blue.</td><td>控制机身 LED 红、绿、蓝、白或关闭。</td></tr>
     </tbody>
   </table>
 
@@ -48,14 +48,14 @@
     <thead><tr><th>聊天需求</th><th>示例</th><th>离线时会怎样</th></tr></thead>
     <tbody>
       <tr><td>检查连接</td><td>检查一下 Stack-chan 现在能不能用。</td><td>仍可返回 Gateway 健康与设备是否已唤醒。</td></tr>
-      <tr><td>让机器人开口</td><td>让 Stack-chan 说：“该休息一下了。”</td><td>明确提示先在设备旁说 “Davie”。</td></tr>
+      <tr><td>让机器人开口</td><td>让 Stack-chan 说：“该休息一下了。”</td><td>明确提示空闲时先在设备旁说 “Hello Davie”。</td></tr>
       <tr><td>查看面前物体</td><td>让 Stack-chan 看看面前是什么，不要朗读结果。</td><td>不伪造画面；提示建立当前设备会话。</td></tr>
       <tr><td>预装伴读</td><td>把这篇 TXT、Markdown 或 HTML 装载到 Stack-chan，先不要播放。</td><td>可以预装并保留进度，不要求设备在线。</td></tr>
       <tr><td>控制设备</td><td>把 Stack-chan 音量调到 45，头向左转 30 度。</td><td>不声称动作成功；提示先唤醒。</td></tr>
       <tr><td>本地提醒</td><td>让 Stack-chan 十分钟后提醒我休息。</td><td>设备本地提醒需要在线；持久任务应改用 Davie 定时任务。</td></tr>
     </tbody>
   </table>
-  <div class="note"><strong>聊天与语音的区别：</strong>聊天可以在机器人离线时预装伴读内容和查询 Gateway；即时开口、拍照、音量、头部、LED 与设备本地提醒必须先在 Stack-chan 旁说 “Davie”，让官方固件建立当前会话。</div>
+  <div class="note"><strong>聊天与语音的区别：</strong>聊天可以在机器人离线时预装伴读内容和查询 Gateway；即时开口、拍照、音量、头部、LED 与设备本地提醒必须先在空闲的 Stack-chan 旁说 “Hello Davie”，让官方固件建立当前会话。若屏幕已经显示 <code>Listening</code>，直接说需求即可。</div>
 
   <h2>屏幕与菜单</h2>
   <p>不新增一套重复的复杂菜单。默认进入官方 AI Agent 界面，屏幕会用 <code>Listening</code>、<code>Looking</code>、<code>Reading</code>、<code>Speaking</code> 等状态告诉你当前动作。需要配网、音量、开机行为或其他官方功能时，再回到官方 Launcher 与 Settings。</p>
@@ -63,15 +63,15 @@
 
   <h2>伴读如何使用</h2>
   <p>书籍或文章由 Davie、Web、Telegram 或其他客户端通过认证 API 装载到 Gateway。内容和句子级进度保存在 Gateway，不依赖 TF 卡，设备重启后仍可继续。TF 卡未来可用于离线书库，但不是当前接入的必要条件。</p>
-  <p>内容可以在 Stack-chan 空闲或离线时预先装载。需要设备立即开口、拍照或执行硬件动作时，请先叫醒 <span class="voice">Davie</span> 建立当前会话；这是官方 1.4.3 的按需连接设计，可减少空闲功耗和无意义长连接。</p>
+  <p>内容可以在 Stack-chan 空闲或离线时预先装载。需要设备立即开口、拍照或执行硬件动作时，请在空闲状态说 <span class="voice">Hello Davie</span> 建立当前会话；这是官方 1.4.3 的按需连接设计。进入 Listening 后会持续听取后续需求，不需要每句话重复唤醒词。</p>
 
   <h2>边界</h2>
   <ul>
     <li>摄像头是 0.3 MP，适合近距离物体和清晰大字，不适合远处小字或复杂扫描件。</li>
-    <li>喊出 “Davie” 后应等待 Listening 状态再说需求。</li>
+    <li>空闲时说 “Hello Davie”，等待 Listening 状态后再说需求；Listening 状态下直接讲话。</li>
     <li>远程立即说话、拍照或控制硬件需要设备处于已连接的 Davie 会话；离线装载的伴读内容会保留。</li>
     <li>语音、网络或模型服务不可用时，设备会明确提示，不会假装完成硬件动作。</li>
-    <li>真人近距离唤醒、房间回声以及播放中打断仍应在实际摆放位置做最终验收。</li>
+    <li>远距离扬声器合成音频已经两次触发唤醒；真人近距离单次唤醒、房间回声以及播放中打断仍应在实际摆放位置做最终验收。</li>
   </ul>
 </main></body>
 </html>

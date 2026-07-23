@@ -116,13 +116,14 @@ def test_runtime_validation_fails_closed_without_credentials() -> None:
         assert "missing required StackChan credentials" in str(exc)
 
 
-def test_camera_explain_uses_local_davie_multimodal_bridge() -> None:
+def test_camera_explain_uses_local_davie_multimodal_bridge(tmp_path) -> None:
     davie = VisionDavie()
     app = create_app(
         Settings(
             device_token="device-secret",
             davie_api_key="davie-secret",
             admin_token="admin-secret",
+            camera_snapshot_dir=str(tmp_path),
         ),
         media_client=NullClient(),
         davie_client=davie,
@@ -137,6 +138,11 @@ def test_camera_explain_uses_local_davie_multimodal_bridge() -> None:
             data={"question": "What do you see?"},
             files={"file": ("camera.jpg", b"\xff\xd8test\xff\xd9", "image/jpeg")},
         )
+        assert client.get("/v1/devices/stackchan-1/camera/latest").status_code == 401
+        latest = client.get(
+            "/v1/devices/stackchan-1/camera/latest",
+            headers={"Authorization": "Bearer admin-secret"},
+        )
     assert response.status_code == 200
     assert response.json() == {"success": True, "result": "I can see a blue cup."}
     assert davie.received == [
@@ -148,15 +154,20 @@ def test_camera_explain_uses_local_davie_multimodal_bridge() -> None:
             None,
         )
     ]
+    assert latest.status_code == 200
+    assert latest.content == b"\xff\xd8test\xff\xd9"
+    assert latest.headers["content-type"] == "image/jpeg"
+    assert latest.headers["cache-control"] == "no-store"
 
 
-def test_camera_explain_continues_the_active_spoken_session() -> None:
+def test_camera_explain_continues_the_active_spoken_session(tmp_path) -> None:
     davie = VisionDavie()
     app = create_app(
         Settings(
             device_token="device-secret",
             davie_api_key="davie-secret",
             admin_token="admin-secret",
+            camera_snapshot_dir=str(tmp_path),
         ),
         media_client=NullClient(),
         davie_client=davie,
@@ -197,13 +208,14 @@ def test_camera_explain_continues_the_active_spoken_session() -> None:
     assert davie.received[1][-1] == "vision-session-1"
 
 
-def test_camera_explain_rejects_device_token_and_oversized_image() -> None:
+def test_camera_explain_rejects_device_token_and_oversized_image(tmp_path) -> None:
     app = create_app(
         Settings(
             device_token="device-secret",
             davie_api_key="davie-secret",
             admin_token="admin-secret",
             max_camera_image_bytes=4,
+            camera_snapshot_dir=str(tmp_path),
         ),
         media_client=NullClient(),
         davie_client=VisionDavie(),

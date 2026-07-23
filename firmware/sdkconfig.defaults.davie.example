@@ -3,12 +3,12 @@
 CONFIG_OTA_URL="http://stackchan-gateway.local:8793/xiaozhi/ota/"
 CONFIG_STACKCHAN_DAVIE_LOCAL_RUNTIME=y
 
-# Use the English MultiNet model so the spoken wake command is really "Davie",
-# rather than a Chinese-pinyin approximation.
+# Use one English MultiNet command. Similar aliases compete with each other and
+# reduce recognition confidence, so keep the canonical spoken phrase unique.
 CONFIG_USE_CUSTOM_WAKE_WORD=y
-CONFIG_CUSTOM_WAKE_WORD="Davie"
+CONFIG_CUSTOM_WAKE_WORD="HELLO DAVIE"
 CONFIG_CUSTOM_WAKE_WORD_DISPLAY="Davie"
-CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=10
+CONFIG_CUSTOM_WAKE_WORD_THRESHOLD=8
 CONFIG_SR_MN_EN_MULTINET5_SINGLE_RECOGNITION_QUANT8=y
 CONFIG_SEND_WAKE_WORD_DATA=n
 CONFIG_WAKE_WORD_DETECTION_IN_LISTENING=y

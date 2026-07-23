@@ -1,3 +1,43 @@
+diff --git a/main/audio/wake_words/custom_wake_word.cc b/main/audio/wake_words/custom_wake_word.cc
+index 982bbe9..9de8e8f 100644
+--- a/main/audio/wake_words/custom_wake_word.cc
++++ b/main/audio/wake_words/custom_wake_word.cc
+@@ -9,6 +9,10 @@
+ #include <esp_mn_speech_commands.h>
+ #include <cJSON.h>
+ 
++extern "C" {
++#include <flite_g2p.h>
++}
++
+ #define TAG "CustomWakeWord"
+ 
+ CustomWakeWord::CustomWakeWord()
+@@ -120,7 +124,23 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list)
+     multinet_->set_det_threshold(multinet_model_data_, threshold_);
+     esp_mn_commands_clear();
+     for (int i = 0; i < commands_.size(); i++) {
+-        esp_mn_commands_add(i + 1, commands_[i].command.c_str());
++        esp_err_t command_result = ESP_OK;
++#if (defined(CONFIG_SR_MN_EN_MULTINET5_SINGLE_RECOGNITION_QUANT8) && CONFIG_SR_MN_EN_MULTINET5_SINGLE_RECOGNITION_QUANT8) || \
++    (defined(CONFIG_SR_MN_EN_MULTINET7_QUANT) && CONFIG_SR_MN_EN_MULTINET7_QUANT)
++        char* phonemes = flite_g2p(commands_[i].command.c_str(), 1);
++        if (phonemes == nullptr) {
++            ESP_LOGE(TAG, "Failed to generate phonemes for command: %s", commands_[i].command.c_str());
++            continue;
++        }
++        ESP_LOGI(TAG, "Command phonemes: %s -> %s", commands_[i].command.c_str(), phonemes);
++        command_result = esp_mn_commands_phoneme_add(i + 1, commands_[i].command.c_str(), phonemes);
++        free(phonemes);
++#else
++        command_result = esp_mn_commands_add(i + 1, commands_[i].command.c_str());
++#endif
++        if (command_result != ESP_OK) {
++            ESP_LOGE(TAG, "Failed to register command: %s", commands_[i].command.c_str());
++        }
+     }
+     esp_mn_commands_update();
+     
 diff --git a/main/application.cc b/main/application.cc
 index d69d43d..3b6f07e 100644
 --- a/main/application.cc

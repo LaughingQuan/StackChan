@@ -51,8 +51,8 @@
     <thead><tr><th>模块</th><th>完成内容</th><th>状态</th></tr></thead>
     <tbody>
       <tr><td>官方固件</td><td>官方 1.4.3 全量构建；Davie 构建开关仅改变入口标签；官方功能默认不分叉。</td><td><span class="ok">PASSED</span></td></tr>
-      <tr><td>语音入口</td><td>无既有偏好时默认进入官方 AI Agent，直接等待 “Davie”；Settings 的用户选择仍是权威覆盖，不复制一套菜单。</td><td><span class="ok">PASSED</span></td></tr>
-      <tr><td>唤醒</td><td>官方 MultiNet5 English Q8，命令与显示文本为 Davie，阈值 10%；未继续盲目降低阈值。</td><td><span class="watch">PHYSICAL CHECK</span></td></tr>
+      <tr><td>语音入口</td><td>无既有偏好时默认进入官方 AI Agent，空闲时等待 “Hello Davie”；Settings 的用户选择仍是权威覆盖，不复制一套菜单。</td><td><span class="ok">PASSED</span></td></tr>
+      <tr><td>唤醒</td><td>官方 MultiNet5 English Q8 使用单一 “HELLO DAVIE” 命令；通过 <code>flite_g2p</code> 生成英文音素后注册，显示文本仍为 Davie，阈值 8%。</td><td><span class="ok">AUTOMATED PHYSICAL PASS</span></td></tr>
       <tr><td>音频</td><td>设备 AEC、双通道输入、Opus 双向流、Fun-ASR、CosyVoice3、播放中 generation 取消。</td><td><span class="ok">SERVICE E2E</span></td></tr>
       <tr><td>视觉</td><td>官方相机 MCP multipart 合同、JPEG 限制、Davie 多模态分析、活动语音会话连续性。</td><td><span class="ok">PASSED</span></td></tr>
       <tr><td>设备工具</td><td>语音帮助、提醒、音量、头部和 LED 由本地路由直接调用官方 MCP；普通对话不会被错误截获，只有工具确认后才回答成功。</td><td><span class="ok">PRODUCTION SMOKE</span></td></tr>
@@ -66,7 +66,7 @@
 
   <h2>实测证据</h2>
   <ul>
-    <li>ESP-IDF 5.5.4 全量固件构建通过，应用分区仍有 27% 空间。</li>
+    <li>ESP-IDF 5.5.4 全量固件构建通过，应用分区仍有 15% 空间。</li>
     <li>生成 assets 为约 4.15 MB（3.96 MiB），低于 4 MiB 分区上限，保留约 38 KiB 余量。</li>
     <li>实体设备启动确认 16 MiB Flash、8 MiB PSRAM、GC0308 相机、触摸、RTC、IMU、舵机、双向音频、官方 MCP 和本地网络均正常。</li>
     <li>Gateway 自动化测试 38 项通过；Python 编译、wheel/sdist 构建通过。</li>
@@ -74,11 +74,13 @@
     <li>生产能力 smoke 发现 5 个模拟官方 MCP 工具，远程音量调用、相机结果回传及两句伴读全部通过；暂停未跳句，恢复后完成，共收到 113 个音频包，测试书籍随后自动卸载。</li>
     <li>视觉 E2E 使用真实 JPEG，经 Davie 多模态接口返回与画面一致的具体描述。</li>
     <li>实体设备固件已刷写并保留原 NVS；启动日志确认自动进入 AI Agent、Davie 唤醒模型、AEC、摄像头和完整官方 MCP 均已载入。</li>
+    <li>启动日志确认只注册一个唤醒命令：<code>HELLO DAVIE -&gt; hcLb DdVm</code>。远距离 Mac 扬声器合成语音完成两次独立唤醒与重连，识别概率分别约 0.47 和 0.44，设备均进入 Listening。</li>
+    <li>唤醒后的真实相机调用已拍到设备上方天花板与矩形灯，并由 Gateway 原子保存 JPEG；同一照片已通过生产 Hermes CLI 发送至 Jason Telegram，消息 ID 为 4371。</li>
     <li>生产服务已升级到 0.2.0 并处于 active，持久化目录可写，健康接口正常，未修改无关 Davie/Hermes 服务。</li>
     <li>Hermes 用户插件测试 26 项通过；生产 Davie 会话 trace 显示延迟工具桥真实执行 <code>stackchan_status</code>，返回 Gateway 0.2.0 正常、设备当前未连接，没有把注册状态冒充物理在线。</li>
   </ul>
 
-  <div class="note"><strong>诚实边界：</strong>自动化播放的远距离合成 “Davie” 未形成可靠声学触发证据，因此真人近距离唤醒、真实环境回声与播放中打断仍需由人在设备旁最终验收。模型载入日志不能替代这项物理证据。官方 1.4.3 采用唤醒后按需建立 WebSocket；离线可预装伴读内容，但远程即时开口、拍照和控制需要当前设备会话已连接。</div>
+  <div class="note"><strong>诚实边界：</strong>远距离合成 “Hello Davie” 已形成两次真实声学触发证据，但一次单独的远距离合成播放仍不稳定；真人在设备旁自然说一次的识别率、真实房间回声与播放中打断仍需最终验收。进入 Listening 后是持续会话，用户应直接说需求，而不是重复唤醒词。离线可预装伴读内容，但远程即时开口、拍照和控制需要当前设备会话已连接。</div>
 
   <h2>构建与部署</h2>
   <h3>固件</h3>
@@ -116,7 +118,7 @@ hermes tools enable --platform feishu stackchan</pre>
 
   <h2>最终真人验收</h2>
   <ol>
-    <li>在设备 0.5 至 1 米内自然说 “Davie”，确认进入 listening。</li>
+    <li>在设备 0.5 至 1 米内自然说 “Hello Davie”，确认一次进入 Listening。</li>
     <li>说一句普通问题，确认 Davie 的文字和语音均正确返回。</li>
     <li>老师声音播放时直接讲话，确认旧音频立即停止且新问题被识别。</li>
     <li>说 “Look at this and explain it”，确认相机内容正确；再追问颜色或物体，确认上下文连续。</li>

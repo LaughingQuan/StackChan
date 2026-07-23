@@ -11,7 +11,7 @@ and audio stack.
 The local integration is split by responsibility:
 
 - `firmware/` contains the upstream device firmware plus build-time switches
-  for the `Davie` wake command, device AEC, the `DAVIE` launcher label, and an
+  for the `Hello Davie` wake command, device AEC, the `DAVIE` launcher label, and an
   assets-size-compatible official English speech model.
 - `integrations/davie-gateway/` is a portable Linux service that translates
   the official Xiaozhi protocol to local ASR, Davie, TTS, vision, hardware
@@ -32,9 +32,10 @@ Davie paths do not depend on removable storage. Reading progress is stored by
 the gateway and survives device or gateway restarts.
 
 The Davie build is voice-first. When no explicit device preference exists it
-boots directly into the official AI Agent, so the user can say `Davie` without
-opening an extra menu. The official launcher and Settings remain available;
-the Settings switch is still the authoritative user override.
+boots directly into the official AI Agent. Say `Hello Davie` once while the
+device is idle; after the screen shows `Listening`, speak requests directly
+without repeating the wake phrase. The official launcher and Settings remain
+available; the Settings switch is still the authoritative user override.
 
 <img src="https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1205/K151_stack_chan_main_pictures_01.webp" width="60%">
 

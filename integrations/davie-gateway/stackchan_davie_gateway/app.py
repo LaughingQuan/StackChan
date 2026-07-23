@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import os
 import re
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Annotated, Any, Callable
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .audio import OpusCodec
@@ -39,6 +42,18 @@ class ReaderLoadRequest(BaseModel):
 
 
 DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9:._-]{1,128}$")
+
+
+def _camera_snapshot_path(directory: str, device_id: str) -> Path:
+    safe_device_id = re.sub(r"[^A-Za-z0-9._-]", "_", device_id)
+    return Path(directory) / f"{safe_device_id}.jpg"
+
+
+def _write_camera_snapshot(path: Path, image_bytes: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(".jpg.tmp")
+    temporary_path.write_bytes(image_bytes)
+    os.replace(temporary_path, path)
 
 
 def create_app(
@@ -160,6 +175,8 @@ def create_app(
             raise HTTPException(status_code=400, detail="camera image is empty")
         if len(image_bytes) > config.max_camera_image_bytes:
             raise HTTPException(status_code=413, detail="camera image is too large")
+        snapshot_path = _camera_snapshot_path(config.camera_snapshot_dir, normalized_device_id)
+        await asyncio.to_thread(_write_camera_snapshot, snapshot_path, image_bytes)
         async with sessions_lock:
             active_session = sessions.get(normalized_device_id)
         if active_session and client_id and active_session.client_id != client_id:
@@ -177,6 +194,28 @@ def create_app(
                 if sessions.get(normalized_device_id) is active_session:
                     active_session.davie_session_id = reply.session_id
         return {"success": True, "result": reply.text}
+
+    @app.get("/v1/devices/{device_id}/camera/latest")
+    async def latest_camera_snapshot(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> FileResponse:
+        require_admin(authorization)
+        if not DEVICE_ID_PATTERN.fullmatch(device_id):
+            raise HTTPException(status_code=400, detail="invalid device identity")
+        snapshot_path = _camera_snapshot_path(config.camera_snapshot_dir, device_id)
+        if not snapshot_path.is_file():
+            raise HTTPException(status_code=404, detail="camera snapshot is not available")
+        captured_at = str(snapshot_path.stat().st_mtime)
+        return FileResponse(
+            snapshot_path,
+            media_type="image/jpeg",
+            filename=f"stackchan-{snapshot_path.name}",
+            headers={
+                "Cache-Control": "no-store",
+                "X-StackChan-Captured-At": captured_at,
+            },
+        )
 
     @app.post("/v1/devices/{device_id}/say")
     async def say(device_id: str, body: SayRequest, authorization: str | None = Header(default=None)):
