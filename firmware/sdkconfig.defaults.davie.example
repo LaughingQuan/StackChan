@@ -2,6 +2,7 @@
 # Wi-Fi credentials do not belong here; provision them through the device UI.
 CONFIG_OTA_URL="http://stackchan-gateway.local:8793/xiaozhi/ota/"
 CONFIG_STACKCHAN_DAVIE_LOCAL_RUNTIME=y
+CONFIG_STACKCHAN_DAVIE_LOW_LATENCY_WIFI=y
 
 # Use one English MultiNet command. Similar aliases compete with each other and
 # reduce recognition confidence, so keep the canonical spoken phrase unique.

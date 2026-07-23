@@ -543,7 +543,19 @@ public:
         if (level != PowerSaveLevel::LOW_POWER) {
             power_save_timer_->WakeUp();
         }
+#ifdef CONFIG_STACKCHAN_DAVIE_LOW_LATENCY_WIFI
+        // The official idle policy maps LOW_POWER to MAX_MODEM with a long
+        // listen interval. This mains-powered voice endpoint favors immediate
+        // local interaction while retaining the display power-save timer.
+        static bool low_latency_wifi_logged = false;
+        if (!low_latency_wifi_logged) {
+            ESP_LOGI(TAG, "Davie low-latency Wi-Fi keeps performance mode");
+            low_latency_wifi_logged = true;
+        }
+        WifiBoard::SetPowerSaveLevel(PowerSaveLevel::PERFORMANCE);
+#else
         WifiBoard::SetPowerSaveLevel(level);
+#endif
     }
 
     virtual Backlight* GetBacklight() override

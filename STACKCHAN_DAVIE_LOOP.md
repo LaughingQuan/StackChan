@@ -233,3 +233,11 @@ handoff:
 - 花费: ¥0；完整 smoke 仅调用本地 NVIDIA 媒体服务与本地 Davie。
 - 边界: 0.3.1 运行目录和 systemd 定义已备份到 NAS；未修改凭据、Davie executor/proactivity，未声称真人声学验收通过。
 - 后续: Knowledge Atlas 两份 Stack-chan 能力文档已更新并同步 AnythingLLM；下一轮量化 Wi-Fi 抖动及其对唤醒/首包体验的影响。
+
+### 【完成】Codex 2026-07-24 01:45 Asia/Singapore — low-latency powered desktop Wi-Fi
+- 发现: 官方 idle 路径把 LOW_POWER 映射成 `WIFI_PS_MAX_MODEM`，station listen interval 为 10；设备日志与 20 包测试呈现约一秒周期延迟，刷写前为 459.846ms average / 928.146ms max。
+- 修复: 新增可关闭的 `CONFIG_STACKCHAN_DAVIE_LOW_LATENCY_WIFI`。Davie 本地运行 profile 默认保持 `PERFORMANCE / WIFI_PS_NONE`，但不改变显示休眠；电池优先部署可关闭该选项恢复官方策略。
+- 验证: host test 1/1、ESP-IDF 5.5.4 全量与增量构建、Gateway 50、Hermes 插件与安装器 28 全部通过；应用 4,407,328 bytes，分区余量 15%。刷写哈希验证通过，启动日志确认 1.4.3、性能模式和 `Set ps type: 0`。相同 20 包测试降至 4.217ms average / 11.398ms max，空闲后复测 4.303ms / 11.644ms，均 0% loss。生产 voice smoke 返回 216,000 PCM bytes / 11.116s，lifecycle smoke 全通过。
+- 恢复: 刷写前完整 16MB 镜像保存于 `/Users/jm2m/NAS/ClawBackups/Hermes/backups/stackchan/pre-low-latency-wifi-20260724-012447`，SHA-256 manifest 校验通过。
+- 花费: ¥0；仅使用本地服务。
+- 边界: 网络与协议证据不能替代真人近场/远场唤醒、扬声器听感和播放中插话验收，这些仍是 pending-human。

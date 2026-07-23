@@ -21,6 +21,16 @@ config STACKCHAN_DAVIE_LOCAL_RUNTIME
         Keep the official AI Agent application and protocol, but show the
         launcher entry as DAVIE for builds connected to the local gateway.
 
+config STACKCHAN_DAVIE_LOW_LATENCY_WIFI
+    bool "Keep Wi-Fi awake for low-latency Davie interaction"
+    default y
+    depends on STACKCHAN_DAVIE_LOCAL_RUNTIME
+    help
+        Keep the station radio in performance mode while the powered desktop
+        robot is idle. This avoids DTIM/listen-interval delays before a local
+        Davie voice session opens. Disable this only when battery runtime is
+        more important than immediate interaction.
+
 config OTA_URL
     string "Default OTA URL"
     default "https://api.tenclass.net/xiaozhi/ota/"

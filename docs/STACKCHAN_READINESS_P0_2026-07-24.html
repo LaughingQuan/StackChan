@@ -25,6 +25,7 @@
     <article class="card"><h3>ASR 错误直接进入 Davie</h3><p>纯名字重复、唤醒尾音、填充词和不可能语速的幻觉缺少前置门禁，会浪费模型时间，也让用户看到“不相关回复”。</p></article>
     <article class="card"><h3>断线后证据消失</h3><p>连接断开后设备会从在线列表消失，无法判断是 no-speech、ASR 拒绝、误打断、自动休眠还是正常关闭。</p></article>
     <article class="card"><h3>插件代码更新不等于运行时生效</h3><p>Davie 工具插件已安装，但长驻 Hermes Gateway 必须重启后才会加载新的 sleep 能力；本轮把“源码、安装副本、运行时”分别验收。</p></article>
+    <article class="card"><h3>Wi-Fi 省电制造近一秒等待</h3><p>官方空闲策略会进入 MAX_MODEM，且 station listen interval 为 10；实测出现约一秒周期性延迟。对常接电的桌面语音终端，这会直接拖慢唤醒后的首包和控制响应。</p></article>
   </div>
 
   <h2>本轮已经实现</h2>
@@ -37,6 +38,7 @@
       <tr><td>打断</td><td>短声先成为 possible speech；只有累计 360ms 有效人声或完整用户回合才确认打断，随后取消旧 generation。</td><td><span class="ok tag">CONTRACT PASS</span></td></tr>
       <tr><td>ASR 质量门禁</td><td>保留采集时长、有效语音、RMS、语言和 CTC；过滤纯唤醒、名字重复、纯 filler 和异常语速。</td><td><span class="ok tag">UNIT PASS</span></td></tr>
       <tr><td>唤醒后自然开口</td><td>第一次空转写保持 Listening；只有非实时模式连续两次空转写才提示重试，非空转写会重置连续计数。</td><td><span class="ok tag">REGRESSION PASS</span></td></tr>
+      <tr><td>低延迟网络</td><td>Davie 固件默认让 Wi-Fi 保持 <code>PERFORMANCE / WIFI_PS_NONE</code>，显示休眠仍保留；如未来改用电池，可通过独立 Kconfig 开关恢复省电。</td><td><span class="ok tag">109× FASTER</span></td></tr>
       <tr><td>可观察性</td><td>在线状态和最近 20 个已关闭会话均可查；仅保存结构化摘要，不保存原始音频。</td><td><span class="ok tag">PRODUCTION</span></td></tr>
       <tr><td>Davie 工具</td><td><code>stackchan_status</code> 区分 Gateway、物理设备会话与未知状态；<code>stackchan_control(action="sleep")</code> 可从 Telegram、飞书、Web/CLI 关闭语音会话。</td><td><span class="ok tag">LIVE</span></td></tr>
     </tbody>
@@ -45,18 +47,21 @@
   <h2>验证证据</h2>
   <ul>
     <li>Gateway 自动化回归：50 项通过；Hermes Stack-chan 插件与安装器：28 项通过。</li>
-    <li>完整本地语音协议 smoke：<code>hello → STT → LLM → TTS</code> 通过，得到 227,520 bytes PCM，约 14.196 秒完成。</li>
+    <li>刷写后的完整本地语音协议 smoke：<code>hello → STT → LLM → TTS</code> 通过，得到 216,000 bytes PCM，约 11.116 秒完成。</li>
     <li>生命周期 smoke：ready 状态、管理员 sleep、设备 Sleeping 事件和 WebSocket 关闭全部通过。</li>
-    <li>固件 host test：1/1；ESP-IDF 5.5.4 全量构建通过，应用镜像 4,407,248 bytes，分区保留 15%。</li>
+    <li>固件 host test：1/1；ESP-IDF 5.5.4 全量及增量构建通过，应用镜像 4,407,328 bytes，分区保留 15%。</li>
     <li>设备启动：固件 1.4.3、16MB Flash、8MB PSRAM、摄像头、触摸、RTC、IMU、舵机、双工音频、Wi-Fi 与本地 Gateway 全部初始化成功。</li>
+    <li>低延迟 Wi-Fi：相同 20 包测试从 <code>459.846ms avg / 928.146ms max</code> 降为 <code>4.217ms avg / 11.398ms max</code>；空闲后复测仍为 <code>4.303ms avg / 11.644ms max</code>，两次均 0% 丢包。</li>
+    <li>串口启动日志确认固件执行 <code>Davie low-latency Wi-Fi keeps performance mode</code>、<code>PERFORMANCE (NONE)</code> 和 <code>Set ps type: 0</code>，不是仅凭构建配置推断。</li>
     <li>生产 Gateway 已升级到 <code>0.3.2</code>；Davie 自然语言回放会先查实时状态，并能正确区分“Gateway 可达”与“设备无活动会话”。</li>
-    <li>NAS 恢复性：原厂 1.4.4、接入前完整镜像、能力增强前镜像和本次刷写前 NVS 均有 SHA-256 校验。</li>
+    <li>NAS 恢复性：低延迟固件刷写前新增完整 16MB 镜像，SHA-256 为 <code>1fe5ee648b42bf053f894839df9c8b6064fdea7da3e640972c89a973aecd28e1</code>，校验通过。</li>
   </ul>
 
   <div class="note"><strong>未伪造的真人验收：</strong>启动日志证明 “Davie” 命令已真正加载，但仍需在设备实际摆放位置测试近场/远场唤醒率、环境噪声误唤醒、Davie 播放时真人插话、中文/英文自然讲话和人耳音质。这些结果不能由网络 smoke 或合成 fixture 代替。</div>
 
   <h2>状态判断规则</h2>
   <p>Knowledge Atlas 记录的是能力、操作方法和历史证据，不代表机器人此刻在线。Davie 在回答“现在能不能用、是否已连接、是否醒着”之前必须调用 <code>stackchan_status</code>。结果中的 <code>gateway_reachable</code> 只证明桥接服务可达；只有 <code>live_state.physical_device_session_active=true</code> 才证明当前存在物理设备会话。人耳是否听到声音仍必须由真人确认。</p>
+  <p>Wi-Fi 策略依据 <a href="https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/wifi-driver/wifi-performance-and-power-save.html">Espressif 官方性能说明</a>：<code>WIFI_PS_NONE</code> 可将实时接收延迟降到最低；modem-sleep 会受 DTIM/listen interval 影响。Stack-chan 是常接电桌面终端，因此交互延迟优先于电池续航。</p>
 
   <h2>现在怎么用</h2>
   <ol>
