@@ -8,6 +8,7 @@
 #include <mcp_server.h>
 #include <stackchan/stackchan.h>
 #include <apps/common/common.h>
+#include "board/hal_bridge.h"
 
 using namespace stackchan;
 
@@ -19,6 +20,28 @@ void Hal::xiaozhi_mcp_init()
 
     // https://github.com/78/xiaozhi-esp32/blob/main/docs/mcp-usage.md
     auto& mcp_server = McpServer::GetInstance();
+
+    mclog::tagInfo(_tag, "add storage.get_status tool");
+    mcp_server.AddTool(
+        "self.storage.get_status",
+        "Return TF edge-storage health, capacity, mount, and read/write self-test evidence. "
+        "This never returns credentials or private file content.",
+        std::vector<Property>{}, [](const PropertyList& properties) -> ReturnValue {
+            return hal_bridge::board_get_storage_status_json();
+        });
+
+    mclog::tagInfo(_tag, "add storage.self_test tool");
+    mcp_server.AddTool(
+        "self.storage.self_test",
+        "Run a bounded TF card test that writes, verifies, and deletes one tiny probe. "
+        "It never formats the card and does not retain microphone audio.",
+        std::vector<Property>{}, [](const PropertyList& properties) -> ReturnValue {
+            const esp_err_t result = hal_bridge::board_run_storage_self_test();
+            if (result != ESP_OK) {
+                return hal_bridge::board_get_storage_status_json();
+            }
+            return hal_bridge::board_get_storage_status_json();
+        });
 
     // System Prompt：
     // You can control the robot's head. Use get_yaw and get_pitch to sense current position. Use set_yaw for horizontal

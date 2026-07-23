@@ -11,7 +11,7 @@ boundaries:
   - "Do not modify Davie executor/proactivity core or unrelated Hermes services."
   - "Never commit or print Wi-Fi credentials, tokens, account secrets, or private device identifiers."
   - "Preserve the verified factory 1.4.4 full-flash backup and a documented restore path."
-  - "Do not format or depend on the current 32 GB TF card."
+  - "Do not format the user's 16 GB TF card; TF-backed features must remain optional and degrade cleanly when the card is absent."
   - "Do not flash hardware until the official host tests, full ESP-IDF build, gateway tests, secret scan, and partition compatibility check pass."
   - "Do not claim wake-word, acoustic interruption, camera, motion, or playback success without physical evidence."
 stop:
@@ -257,3 +257,17 @@ handoff:
 - 花费: ¥0；全部使用本地 Fun-ASR、Qwen/Davie 与 CosyVoice。
 - 边界: 未调用付费模型，未修改 Davie executor/proactivity；合成 canary 只能证明协议和音频数据链路，真人唤醒率、人耳音质、房间回声和播放中打断仍需现场验收。
 - 后续: 将当前未版本化的 NVIDIA media-gateway 纳入独立仓库后，再隔离评估 CosyVoice vLLM/TensorRT 真 chunk streaming；不要直接改生产 worker。Davie 的通用“current version”确定性健康路由会把 Stack-chan 版本问句误判成 Hermes Gateway 状态，精确知识检索不受影响；该路由应在独立 Davie 变更中修复，不能混入本仓库。
+
+### 【进行中】Codex 2026-07-24 00:00 Asia/Singapore — TF storage and interaction loop (TTL 8h)
+- 正在改: `firmware/main/hal/board/**`, `firmware/main/hal/hal_mcp.cpp`, `firmware/main/CMakeLists.txt`, `firmware/main/Kconfig.projbuild`, `firmware/sdkconfig.defaults.davie.example`, `integrations/davie-gateway/**`, `integrations/hermes-stackchan/**`, `docs/**`, `README.md`, `STACKCHAN_DAVIE_LOOP.md`
+- 目标: 安全启用 CoreS3 TF 卡，提供可观察、可降级的存储能力，并用于伴读缓存、离线恢复、有限诊断与更流畅的 Davie 交互；每个阶段验证后再继续。
+- 验证: firmware host test、完整 ESP-IDF build、Gateway/插件全量测试、secret scan、分区兼容、TF 实卡 mount/read/write/screen coexistence canary、生产服务与设备回归。
+- 边界: ¥0；不调用付费/云端模型；不修改 Davie executor/proactivity；不格式化 TF 卡；不把协议或设备在线冒充真人声学通过；保留官方恢复镜像与 NVS。
+
+### 【完成】Codex 2026-07-24 04:05 Asia/Singapore — P1 optional TF edge-storage foundation
+- 发现: CoreS3 的 TF 与 LCD 共享 SPI3，GPIO35 同时承担 LCD D/C 输出和 TF MISO 输入；原固件既未供电也未挂载 TF。首次真机日志还暴露了 compact log 不正确渲染 64 位容量参数的问题。
+- 修复: 按 Espressif CoreS3 BSP 的供电与共享总线合同启用 TF，挂载 `/tf` 且明确禁用自动格式化；创建 Davie 的 library/cache/diag 目录；启动时执行 tiny write/flush/fsync/read/compare/delete 自检；提供只读状态与人工触发自检 MCP；无卡或损坏时仅降级存储。修正容量日志为 ESP 可稳定输出的 MiB 数值。
+- 验证: 固件 host binary exit 0；Gateway `60 passed`；完整 ESP-IDF 5.5.4 build exit 0，app `0x4407d0`、14% free；旧/新 3 KiB 分区表 `cmp` exit 0；NAS 16 MiB full flash、NVS、分区表和候选镜像全部 SHA-256 `OK`；真机两次启动均显示 `TF card ready`，最终容量 `14895 MiB`、writable=1，随后 LCD、camera、touch、audio、Wi-Fi、wake model 全部正常且无 panic/reboot；设备 ping 3/3、Gateway 0.3.11 health OK。
+- 花费: ¥0；没有调用付费或云端模型/API。
+- 边界: 未格式化 TF、未存储凭据或原始麦克风音频、未修改 Davie executor/proactivity；启动日志与网络可达不冒充真人唤醒或人耳播放证据。
+- 后续: 在 TF 抽象上增加小型本地笔记、伴读断点与有界诊断日志，并通过 Gateway/Davie 工具暴露；所有操作保持非首音频关键路径。

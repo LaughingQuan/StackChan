@@ -8,9 +8,11 @@
 #include "i2c_device.h"
 #include "axp2101.h"
 #include "settings.h"
+#include "davie_tf_storage.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
+#include <driver/gpio.h>
 #include <wifi_station.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
@@ -124,6 +126,17 @@ public:
         // still counts even after the battery is full.
         return current_direction != 2 || is_charging_done;
     }
+
+    void SetSdPowerEnabled(bool enabled)
+    {
+        if (enabled) {
+            WriteReg(0x95, 33 - 5);  // ALDO4 at 3.3 V.
+        }
+
+        uint8_t val = ReadReg(0x90);
+        val = enabled ? static_cast<uint8_t>(val | 0x08) : static_cast<uint8_t>(val & ~0x08);
+        WriteReg(0x90, val);
+    }
 };
 
 class CustomBacklight : public Backlight {
@@ -172,6 +185,16 @@ public:
         vTaskDelay(pdMS_TO_TICKS(20));
         WriteReg(0x03, 0b10000011);
         vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    void SetSdPowerEnabled(bool enabled)
+    {
+        uint8_t direction = ReadReg(0x04);
+        WriteReg(0x04, static_cast<uint8_t>(direction & ~0x10));  // P0.4 output.
+
+        uint8_t output = ReadReg(0x02);
+        output = enabled ? static_cast<uint8_t>(output | 0x10) : static_cast<uint8_t>(output & ~0x10);
+        WriteReg(0x02, output);
     }
 };
 
@@ -243,6 +266,7 @@ private:
     Ft6336* ft6336_;
     LvglDisplay* display_;
     StackChanCamera* camera_;
+    DavieTfStorage* storage_ = nullptr;
     esp_timer_handle_t touchpad_timer_;
     PowerSaveTimer* power_save_timer_;
     hal_bridge::XiaozhiConfig_t xiaozhi_config_;
@@ -398,12 +422,34 @@ private:
     {
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num      = GPIO_NUM_37;
-        buscfg.miso_io_num      = GPIO_NUM_NC;
+        // CoreS3 shares GPIO35 between LCD D/C output and TF MISO input.
+        // This matches the official Espressif CoreS3 BSP shared SPI3 setup.
+        buscfg.miso_io_num      = GPIO_NUM_35;
         buscfg.sclk_io_num      = GPIO_NUM_36;
         buscfg.quadwp_io_num    = GPIO_NUM_NC;
         buscfg.quadhd_io_num    = GPIO_NUM_NC;
         buscfg.max_transfer_sz  = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
         ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
+    }
+
+    void InitializeTfStorage()
+    {
+#ifdef CONFIG_STACKCHAN_DAVIE_TF_STORAGE
+        ESP_LOGI(TAG, "Init Davie TF edge storage");
+        pmic_->SetSdPowerEnabled(true);
+        aw9523_->SetSdPowerEnabled(true);
+        vTaskDelay(pdMS_TO_TICKS(20));
+
+        // Keep GPIO35 input-capable after the LCD driver configured its output
+        // role. ESP32-S3 supports simultaneous input and output on this pin.
+        gpio_input_enable(GPIO_NUM_35);
+
+        storage_ = new DavieTfStorage();
+        const esp_err_t result = storage_->Mount();
+        if (result != ESP_OK) {
+            ESP_LOGW(TAG, "TF storage degraded; continuing normal Davie startup");
+        }
+#endif
     }
 
     void InitializeIli9342Display()
@@ -500,6 +546,7 @@ public:
         I2cDetect();
         InitializeSpi();
         InitializeIli9342Display();
+        InitializeTfStorage();
         InitializeCamera();
         InitializeFt6336TouchPad();
         GetBacklight()->RestoreBrightness();
@@ -568,6 +615,30 @@ public:
     {
         return i2c_bus_;
     }
+
+    std::string GetStorageStatusJson() const
+    {
+#ifdef CONFIG_STACKCHAN_DAVIE_TF_STORAGE
+        if (storage_ != nullptr) {
+            return storage_->StatusJson();
+        }
+        return R"({"enabled":true,"mount_attempted":false,"mounted":false,"writable":false,"self_test_passed":false,"total_bytes":0,"free_bytes":0,"mount_point":"/tf","last_error":"storage_not_initialized"})";
+#else
+        return R"({"enabled":false,"mount_attempted":false,"mounted":false,"writable":false,"self_test_passed":false,"total_bytes":0,"free_bytes":0,"mount_point":"","last_error":""})";
+#endif
+    }
+
+    esp_err_t RunStorageSelfTest()
+    {
+#ifdef CONFIG_STACKCHAN_DAVIE_TF_STORAGE
+        if (storage_ != nullptr) {
+            return storage_->RunSelfTest();
+        }
+        return ESP_ERR_INVALID_STATE;
+#else
+        return ESP_ERR_NOT_SUPPORTED;
+#endif
+    }
 };
 
 DECLARE_BOARD(M5StackCoreS3Board);
@@ -576,6 +647,18 @@ i2c_master_bus_handle_t hal_bridge::board_get_i2c_bus()
 {
     auto& board = (M5StackCoreS3Board&)Board::GetInstance();
     return board.GetI2cBus();
+}
+
+std::string hal_bridge::board_get_storage_status_json()
+{
+    auto& board = static_cast<M5StackCoreS3Board&>(Board::GetInstance());
+    return board.GetStorageStatusJson();
+}
+
+esp_err_t hal_bridge::board_run_storage_self_test()
+{
+    auto& board = static_cast<M5StackCoreS3Board&>(Board::GetInstance());
+    return board.RunStorageSelfTest();
 }
 
 StackChanCamera* hal_bridge::board_get_camera()

@@ -3,6 +3,8 @@
 CONFIG_OTA_URL="http://stackchan-gateway.local:8793/xiaozhi/ota/"
 CONFIG_STACKCHAN_DAVIE_LOCAL_RUNTIME=y
 CONFIG_STACKCHAN_DAVIE_LOW_LATENCY_WIFI=y
+CONFIG_STACKCHAN_DAVIE_TF_STORAGE=y
+CONFIG_STACKCHAN_DAVIE_TF_STARTUP_SELF_TEST=y
 
 # Use one English MultiNet command. Similar aliases compete with each other and
 # reduce recognition confidence, so keep the canonical spoken phrase unique.

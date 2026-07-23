@@ -31,6 +31,24 @@ config STACKCHAN_DAVIE_LOW_LATENCY_WIFI
         Davie voice session opens. Disable this only when battery runtime is
         more important than immediate interaction.
 
+config STACKCHAN_DAVIE_TF_STORAGE
+    bool "Enable the CoreS3 TF edge-storage vault"
+    default y
+    depends on STACKCHAN_DAVIE_LOCAL_RUNTIME
+    help
+        Mount the CoreS3 TF card at /tf without ever formatting it
+        automatically. Missing, damaged, or read-only media degrades only
+        storage features; voice, display, camera, and Davie remain available.
+
+config STACKCHAN_DAVIE_TF_STARTUP_SELF_TEST
+    bool "Verify TF read/write safety at startup"
+    default y
+    depends on STACKCHAN_DAVIE_TF_STORAGE
+    help
+        Write, read, verify, and delete one tiny probe under /tf/davie/diag.
+        This provides evidence that the card is writable without retaining
+        microphone audio, credentials, or other private data.
+
 config OTA_URL
     string "Default OTA URL"
     default "https://api.tenclass.net/xiaozhi/ota/"

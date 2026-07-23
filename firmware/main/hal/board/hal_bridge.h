@@ -9,6 +9,7 @@
 #include <lvgl.h>
 #include <driver/i2c_master.h>
 #include <string_view>
+#include <string>
 
 namespace hal_bridge {
 
@@ -59,6 +60,8 @@ XiaozhiConfig_t get_xiaozhi_config();
 void set_xiaozhi_config(const XiaozhiConfig_t& config);
 
 i2c_master_bus_handle_t board_get_i2c_bus();
+std::string board_get_storage_status_json();
+esp_err_t board_run_storage_self_test();
 StackChanCamera* board_get_camera();
 int board_get_battery_level();
 bool board_is_battery_charging();
