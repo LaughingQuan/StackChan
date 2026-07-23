@@ -48,8 +48,8 @@ CAPABILITIES: tuple[dict[str, str], ...] = (
         "id": "session_control",
         "label": "Voice session lifecycle",
         "description": (
-            "End the current voice session explicitly. A person wakes the device locally by "
-            "saying the configured wake phrase."
+            "Start or end the current voice session locally. Say the configured wake phrase, "
+            "or tap Davie's face when speech is missed."
         ),
     },
 )
@@ -142,7 +142,18 @@ def capability_manifest() -> dict[str, Any]:
             "wake": {
                 "method": "device_local_voice",
                 "phrase": "Davie",
-                "instruction": "Say 'Davie' near the device, then wait for the screen to show Listening.",
+                "instruction": (
+                    "Say 'Davie' near the device, then wait for the screen to show Listening. "
+                    "If speech is missed, tap Davie's face once."
+                ),
+                "fallback": {
+                    "method": "screen_tap",
+                    "target": "avatar_face",
+                    "instruction": (
+                        "Tap Davie's face once to start or end a voice session if the wake phrase "
+                        "is missed."
+                    ),
+                },
             },
             "end": {
                 "voice_phrases": ["Goodbye Davie", "Go to sleep", "休息吧"],
@@ -173,12 +184,13 @@ def capability_reply(*, chinese: bool) -> str:
         return (
             "我可以和你对话、用摄像头看并解释、朗读文章或书籍并暂停继续，"
             "也可以在 TF 卡里保存短笔记和阅读断点、设置提醒、调整音量和控制头部或灯光。"
-            "你可以直接说，Davie，记一下，周五给银行回复。"
+            "你可以直接说，Davie，记一下，周五给银行回复。如果没有听到唤醒词，点一下我的脸就能开始对话。"
         )
     return (
         "I can talk with you, look and explain with my camera, read a book with pause and resume, "
         "save short notes and reading progress on the TF card, set reminders, and control my volume, "
-        "head, or light. Try saying, Davie, remember this: call the bank on Friday."
+        "head, or light. Try saying, Davie, remember this: call the bank on Friday. If I miss the "
+        "wake phrase, tap my face once to start talking."
     )
 
 

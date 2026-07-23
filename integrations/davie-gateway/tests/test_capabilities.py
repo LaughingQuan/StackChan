@@ -12,7 +12,18 @@ def test_capability_manifest_is_voice_first_and_names_wake_word() -> None:
         "wake": {
             "method": "device_local_voice",
             "phrase": "Davie",
-            "instruction": "Say 'Davie' near the device, then wait for the screen to show Listening.",
+            "instruction": (
+                "Say 'Davie' near the device, then wait for the screen to show Listening. "
+                "If speech is missed, tap Davie's face once."
+            ),
+            "fallback": {
+                "method": "screen_tap",
+                "target": "avatar_face",
+                "instruction": (
+                    "Tap Davie's face once to start or end a voice session if the wake phrase "
+                    "is missed."
+                ),
+            },
         },
         "end": {
             "voice_phrases": ["Goodbye Davie", "Go to sleep", "休息吧"],
@@ -28,6 +39,7 @@ def test_capability_manifest_is_voice_first_and_names_wake_word() -> None:
         "reminder",
         "session_control",
     }
+    assert manifest["voice_session"]["wake"]["fallback"]["method"] == "screen_tap"
 
 
 def test_parse_reader_and_device_actions_in_both_languages() -> None:

@@ -409,9 +409,11 @@ void StackChanAvatarDisplay::ClearChatMessages()
 
     DisplayLockGuard lock(this);
 
-    stackchan.avatar().clearSpeech();
+    auto& avatar = stackchan.avatar();
+    avatar.clearSpeech();
+    avatar.setSpeech("Say \"Davie\"\nor tap me");
 
-    ESP_LOGI(TAG, "Chat messages cleared");
+    ESP_LOGI(TAG, "Chat messages cleared; idle interaction hint shown");
 }
 
 void StackChanAvatarDisplay::SetPreviewImage(std::unique_ptr<LvglImage> image)
@@ -488,12 +490,10 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
     }
 
     auto& avatar = stackchan.avatar();
-    auto& motion = stackchan.motion();
 
     DisplayLockGuard lock(this);
 
-    bool is_idle      = false;
-    bool is_listening = false;
+    bool is_idle = false;
 
     if (strcmp(status, Lang::Strings::LISTENING) == 0) {
         if (speaking_modifier_id_ >= 0) {
@@ -505,6 +505,7 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
 
         GetHAL().setRgbColor(0, 0, 50, 0);
         GetHAL().refreshRgb();
+        avatar.setSpeech("Listening...");
 
     } else if (strcmp(status, Lang::Strings::STANDBY) == 0) {
         _is_xiaozhi_ready = true;
@@ -552,12 +553,6 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
             stackchan.removeModifier(idle_expression_modifier_id_);
             idle_expression_modifier_id_ = -1;
         }
-
-        // if (!is_listening) {
-        //     // Return to default pose
-        //     motion.pitchServo().moveWithSpeed(200, 350);
-        //     motion.yawServo().moveWithSpeed(0, 350);
-        // }
 
         _is_xiaozhi_idle = false;
     }

@@ -279,3 +279,11 @@ handoff:
 - 花费: ¥0；没有调用付费或云端模型/API。
 - 边界: 未格式化 TF；未写凭据、原始音频或长文档；未修改 Davie executor/proactivity；启动与合成 canary 不替代真人唤醒/听声。
 - 后续: 增加明确的屏幕交互提示与物理触控兜底说明，减少“唤醒失败时不知道下一步”的挫败；部署 Gateway/插件后用真人会话补做真实 MCP 读写。
+
+### 【完成】Codex 2026-07-24 04:50 Asia/Singapore — P3 discoverable voice/touch interaction
+- 发现: 官方 UI 已经支持点按头像切换语音会话，但空闲屏幕、Gateway 能力合同和 Davie 工具均没有告诉用户；唤醒漏检后只剩反复说唤醒词，形成“机器人不能用”的错误体验。继续降低 0.08 唤醒阈值会增加噪声误触发，不是可靠修复。
+- 修复: 空闲屏幕固定显示 `Say "Davie" or tap me`，进入收听后显示 `Listening...`；保留本地 `Davie` 语音优先，并把点脸一次开始/结束会话作为正式无模型兜底。Gateway capability manifest、Hermes live status 和中英文帮助回复均暴露同一操作合同。
+- 验证: Gateway `62 passed`；Hermes 插件 `34 passed`；两套 Ruff 基线门禁通过；firmware host test `1/1`；ESP-IDF 完整构建无新增警告，app `0x444170`、14% free；分区表与 NAS 刷机前备份逐字节一致；仅刷应用分区且哈希验证通过。真实启动日志确认 TF `14895 MiB` 可写、8 个存储 MCP、LCD、触摸、摄像头、双工音频、Wi-Fi、低延迟模式和 `Davie` 唤醒模型全部正常，并确认空闲提示代码已经执行。
+- 花费: ¥0；没有调用付费或云端模型/API。
+- 边界: 日志和代码不能替代真人看到屏幕、实际点按、近场唤醒及人耳听声；这些仍需用户在设备旁最终确认。没有修改 Davie executor/proactivity，也没有降低唤醒阈值。
+- 后续: 发布 Gateway/插件合同，更新人类可读 Knowledge Atlas 使用指南，并执行生产服务、协议、媒体和设备深度回归。

@@ -11,7 +11,7 @@ and audio stack.
 The local integration is split by responsibility:
 
 - `firmware/` contains the upstream device firmware plus build-time switches
-  for the `Hello Davie` wake command, device AEC, the `DAVIE` launcher label, and an
+  for the `Davie` wake command, device AEC, the `DAVIE` launcher label, and an
   assets-size-compatible official English speech model.
 - `integrations/davie-gateway/` is a portable Linux service that translates
   the official Xiaozhi protocol to local ASR, Davie, TTS, vision, hardware
@@ -27,19 +27,22 @@ Wi-Fi credentials and runtime tokens are intentionally absent from Git. Copy
 `firmware/sdkconfig.defaults.local`, set only local endpoints there, and use
 the official device provisioning flow for Wi-Fi.
 
-The TF card is optional. The current voice, camera, motion, display, OTA, and
-Davie paths do not depend on removable storage. Reading progress is stored by
-the gateway and survives device or gateway restarts. The current firmware does
-not mount or expose the CoreS3 microSD slot; inserting a card alone will not make
-it visible through USB or the Davie device status API.
+The TF card is optional. Voice, camera, motion, display, OTA, and Davie still
+work without removable storage. When a compatible card is present, the device
+mounts it at `/tf` without auto-formatting and exposes bounded local notes,
+one reader checkpoint, and a rolling diagnostic log. It never stores
+credentials or continuous microphone audio. Gateway reader state remains the
+authoritative long-form reading record; the TF checkpoint is a device-side
+recovery copy.
 
 The Davie build is voice-first. When no explicit device preference exists it
-boots directly into the official AI Agent. Say `Hello Davie` once while the
-device is idle; after the screen shows `Listening`, speak requests directly
-without repeating the wake phrase. Empty realtime ASR results are ignored so a
-wake chime tail or a short noise burst does not replace `Listening` with a false
-failure message. The official launcher and Settings remain available; the
-Settings switch is still the authoritative user override.
+boots directly into the official AI Agent. Say `Davie` once while the device is
+idle; after the screen shows `Listening...`, speak requests directly without
+repeating the wake phrase. If speech is missed, tap Davie's face once to start
+the same local voice session without waiting for ASR. Empty realtime ASR
+results are ignored so a wake chime tail or a short noise burst does not replace
+`Listening...` with a false failure message. The official launcher and Settings
+remain available; the Settings switch is still the authoritative user override.
 
 <img src="https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1205/K151_stack_chan_main_pictures_01.webp" width="60%">
 

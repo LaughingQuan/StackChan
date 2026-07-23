@@ -717,8 +717,17 @@ class StackChanClient:
                     "method": "device_local_voice",
                     "phrase": str(manifest.get("wake_word") or "Davie"),
                     "instruction": (
-                        "Say 'Davie' near the device, then wait for the screen to show Listening."
+                        "Say 'Davie' near the device, then wait for the screen to show Listening. "
+                        "If speech is missed, tap Davie's face once."
                     ),
+                    "fallback": {
+                        "method": "screen_tap",
+                        "target": "avatar_face",
+                        "instruction": (
+                            "Tap Davie's face once to start or end a voice session if the wake "
+                            "phrase is missed."
+                        ),
+                    },
                 },
                 "end": {
                     "voice_phrases": ["Goodbye Davie", "Go to sleep", "休息吧"],
