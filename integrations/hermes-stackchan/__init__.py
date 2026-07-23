@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import sys
@@ -299,6 +300,115 @@ def _command_status(_raw_args: str = "") -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def _format_live_state_response(evidence: dict[str, Any], *, chinese: bool) -> str:
+    gateway_reachable = evidence.get("gateway_reachable") is True
+    live_state = evidence.get("live_state")
+    if not isinstance(live_state, dict):
+        live_state = {}
+    physical_status = str(live_state.get("physical_status") or "unknown")
+
+    if chinese:
+        gateway_line = "可达" if gateway_reachable else "当前查询失败"
+        if physical_status == "active_session":
+            session_line = "已有活动物理会话，可以接收即时说话、摄像头和设备控制请求。"
+            next_step = "直接对 Davie 说需求即可；声学与触摸体验仍以真人实际操作为准。"
+        elif physical_status == "no_active_session":
+            session_line = (
+                "当前没有活动物理会话。这不等于机器人断电或 Wi-Fi 离线，只表示它尚未进入 "
+                "Davie 语音会话。"
+            )
+            next_step = (
+                "在机器人旁说“Davie”，或点一下 Davie 的脸；看到 Listening... 后再说需求。"
+            )
+        else:
+            session_line = "当前无法确认物理机器人是否已建立会话，不能据此声称在线或离线。"
+            next_step = "先确认 Stack-chan 已开机联网，再说“Davie”或点一下脸建立会话。"
+        return (
+            "Stack-chan 实时状态\n"
+            f"- 本地 Gateway：{gateway_line}\n"
+            f"- 物理会话：{session_line}\n\n"
+            "黑屏可能只是正常息屏，不能单独作为离线证据。\n"
+            f"下一步：{next_step}"
+        )
+
+    gateway_line = "reachable" if gateway_reachable else "live query failed"
+    if physical_status == "active_session":
+        session_line = (
+            "An active physical session is connected and can accept immediate speech, camera, "
+            "and device-control requests."
+        )
+        next_step = (
+            "Speak your request directly; acoustic and touch quality still require real human use."
+        )
+    elif physical_status == "no_active_session":
+        session_line = (
+            "There is no active physical session. This does not prove that the robot is powered "
+            "off or disconnected from Wi-Fi; it only means it has not entered a Davie voice session."
+        )
+        next_step = (
+            'Say "Davie" near the robot, or tap Davie\'s face once, then wait for Listening...'
+        )
+    else:
+        session_line = (
+            "The current physical session cannot be confirmed, so the robot must not be reported "
+            "as online or offline."
+        )
+        next_step = (
+            'Confirm that Stack-chan is powered and networked, then say "Davie" or tap its face.'
+        )
+    return (
+        "Stack-chan live status\n"
+        f"- Local Gateway: {gateway_line}\n"
+        f"- Physical session: {session_line}\n\n"
+        "A dark screen may be normal display sleep and is not, by itself, offline evidence.\n"
+        f"Next step: {next_step}"
+    )
+
+
+def _live_state_evidence() -> dict[str, Any]:
+    try:
+        return StackChanClient(_config()).status(include_capabilities=False)
+    except StackChanError as exc:
+        return exc.as_dict()
+
+
+def _send_gateway_text(gateway: Any, event: Any, text: str) -> bool:
+    source = getattr(event, "source", None)
+    if source is None:
+        return False
+    adapter = getattr(gateway, "adapters", {}).get(getattr(source, "platform", None))
+    chat_id = getattr(source, "chat_id", None)
+    if adapter is None or not hasattr(adapter, "send") or not chat_id:
+        return False
+    try:
+        asyncio.get_running_loop().create_task(adapter.send(chat_id, text))
+        return True
+    except Exception:
+        return False
+
+
+def _handle_current_state_pre_gateway_dispatch(**kwargs: Any) -> dict[str, str]:
+    event = kwargs.get("event")
+    gateway = kwargs.get("gateway")
+    user_message = str(getattr(event, "text", "") or "").strip()
+    if (
+        not user_message
+        or gateway is None
+        or not _CURRENT_STATE_ENTITY_RE.search(user_message)
+        or not _CURRENT_STATE_REQUEST_RE.search(user_message)
+    ):
+        return {"action": "allow"}
+
+    evidence = _live_state_evidence()
+    response = _format_live_state_response(
+        evidence,
+        chinese=bool(re.search(r"[\u3400-\u9fff]", user_message)),
+    )
+    if _send_gateway_text(gateway, event, response):
+        return {"action": "skip", "reason": "stackchan_live_state_sent"}
+    return {"action": "allow"}
+
+
 def stackchan_pre_llm_hint(**kwargs: Any) -> dict[str, str] | None:
     """Inject current physical-state evidence when the user explicitly asks for it."""
     user_message = str(kwargs.get("user_message") or "").strip()
@@ -309,10 +419,11 @@ def stackchan_pre_llm_hint(**kwargs: Any) -> dict[str, str] | None:
     ):
         return None
 
-    try:
-        evidence = StackChanClient(_config()).status(include_capabilities=False)
-    except StackChanError as exc:
-        evidence = exc.as_dict()
+    evidence = _live_state_evidence()
+    exact_response = _format_live_state_response(
+        evidence,
+        chinese=bool(re.search(r"[\u3400-\u9fff]", user_message)),
+    )
 
     compact_evidence = json.dumps(
         evidence,
@@ -324,14 +435,16 @@ def stackchan_pre_llm_hint(**kwargs: Any) -> dict[str, str] | None:
         "context": (
             "[StackChan current-state evidence]\n"
             "A live local StackChan status query for this exact turn has already completed. "
-            "Answer directly from the evidence below; do not ask what StackChan means, do not "
-            "invent Docker/container/monitoring checks, and do not call stackchan_status again. "
+            "Return the exact prepared answer below and stop. Do not call any tool, inspect the "
+            "host display, ask what StackChan means, invent Docker/container/monitoring checks, "
+            "or call stackchan_status again. "
             "Distinguish Gateway reachability from an active physical device session. "
             "A dark screen may be normal display sleep and is not proof that the robot is offline. "
             "The screen-tap fallback is loaded in firmware, but its physical acceptance remains "
             "pending_human until a person confirms the real touch interaction. Never describe "
             "wake-word, touch, speaker, or microphone behavior as human-verified unless the "
             "evidence explicitly says so.\n"
+            f"Exact prepared answer:\n{exact_response}\n"
             f"Live evidence JSON: {compact_evidence}"
         )
     }
@@ -358,6 +471,13 @@ def register(ctx: Any) -> None:
         )
     try:
         ctx.register_hook("pre_llm_call", stackchan_pre_llm_hint)
+    except (AttributeError, TypeError):
+        pass
+    try:
+        ctx.register_hook(
+            "pre_gateway_dispatch",
+            _handle_current_state_pre_gateway_dispatch,
+        )
     except (AttributeError, TypeError):
         pass
     try:

@@ -19,6 +19,11 @@ evidence before inference. Unrelated turns do not perform this query. The hook d
 Gateway reachability from an active physical device session and preserves `pending_human` for
 touch, wake-word, microphone, and speaker acceptance.
 
+Messaging Gateway channels such as Telegram and Feishu use the same evidence to return a short
+deterministic status answer before model dispatch. This avoids slow or invented host checks for
+a question that has a single authenticated local answer. API/CLI turns receive the prepared
+answer through `pre_llm_call` without changing Hermes core.
+
 ## Install
 
 ```bash

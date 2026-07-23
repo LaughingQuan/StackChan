@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -665,6 +668,7 @@ def test_live_state_hook_prefetches_truthful_device_evidence(gateway, monkeypatc
     assert '"physical_status":"active_session"' in hint["context"]
     assert "dark screen may be normal display sleep" in hint["context"]
     assert "pending_human" in hint["context"]
+    assert "Exact prepared answer" in hint["context"]
     assert "stackchan-main" not in hint["context"]
     assert _GatewayHandler.token not in hint["context"]
 
@@ -684,7 +688,8 @@ def test_live_state_hook_reports_no_session_without_claiming_offline(gateway, mo
     assert hint is not None
     assert '"gateway_reachable":true' in hint["context"]
     assert '"physical_status":"no_active_session"' in hint["context"]
-    assert "do not call stackchan_status again" in hint["context"]
+    assert "Do not call any tool" in hint["context"]
+    assert "call stackchan_status again" in hint["context"]
 
 
 @pytest.mark.parametrize(
@@ -698,6 +703,56 @@ def test_live_state_hook_reports_no_session_without_claiming_offline(gateway, mo
 )
 def test_live_state_hook_does_not_slow_unrelated_turns(message):
     assert plugin_module.stackchan_pre_llm_hint(user_message=message) is None
+
+
+@pytest.mark.asyncio
+async def test_gateway_current_state_request_is_answered_without_model(gateway, monkeypatch):
+    _GatewayHandler.devices = []
+    monkeypatch.setattr(
+        plugin_module,
+        "_config",
+        lambda: plugin_module.StackChanConfig.load(gateway),
+    )
+    platform = object()
+    adapter = SimpleNamespace(send=AsyncMock())
+    gateway_context = SimpleNamespace(adapters={platform: adapter})
+    event = SimpleNamespace(
+        text="桌面机器人现在能用吗？黑屏是不是离线？",
+        source=SimpleNamespace(platform=platform, chat_id="chat-1"),
+    )
+
+    result = plugin_module._handle_current_state_pre_gateway_dispatch(
+        event=event,
+        gateway=gateway_context,
+    )
+    await asyncio.sleep(0)
+
+    assert result == {
+        "action": "skip",
+        "reason": "stackchan_live_state_sent",
+    }
+    adapter.send.assert_awaited_once()
+    chat_id, response = adapter.send.await_args.args
+    assert chat_id == "chat-1"
+    assert "当前没有活动物理会话" in response
+    assert "不等于机器人断电或 Wi-Fi 离线" in response
+    assert "黑屏可能只是正常息屏" in response
+    assert "Rock5B" not in response
+    assert "Docker" not in response
+
+
+def test_gateway_current_state_handler_ignores_unrelated_message():
+    event = SimpleNamespace(
+        text="请设计未来的桌面机器人能力",
+        source=SimpleNamespace(platform=object(), chat_id="chat-1"),
+    )
+
+    result = plugin_module._handle_current_state_pre_gateway_dispatch(
+        event=event,
+        gateway=SimpleNamespace(adapters={}),
+    )
+
+    assert result == {"action": "allow"}
 
 
 def test_plugin_registers_status_speech_and_vision_tools():
@@ -735,4 +790,10 @@ def test_plugin_registers_status_speech_and_vision_tools():
     assert tools["stackchan_reminder"]["handler"] is plugin_module._handle_reminder
     assert tools["stackchan_storage"]["handler"] is plugin_module._handle_storage
     hooks = [item[1] for item in calls if item[0] == "hook"]
-    assert hooks == [("pre_llm_call", plugin_module.stackchan_pre_llm_hint)]
+    assert hooks == [
+        ("pre_llm_call", plugin_module.stackchan_pre_llm_hint),
+        (
+            "pre_gateway_dispatch",
+            plugin_module._handle_current_state_pre_gateway_dispatch,
+        ),
+    ]
