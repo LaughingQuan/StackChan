@@ -20,3 +20,4 @@ firmware/xiaozhi-esp32/
 *.runtime.env
 *.secret
 *.md.lock
+.codex/

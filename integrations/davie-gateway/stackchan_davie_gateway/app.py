@@ -99,14 +99,14 @@ def create_app(
         if davie_client is None:
             await davie.close()
 
-    app = FastAPI(title="StackChan Davie Gateway", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="StackChan Davie Gateway", version="0.3.0", lifespan=lifespan)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
         return {
             "status": "ok",
             "service": "stackchan-davie-gateway",
-            "version": "0.2.0",
+            "version": "0.3.0",
             "connected_devices": len(sessions),
             "device_auth_configured": bool(config.device_token),
             "davie_auth_configured": bool(config.davie_api_key),

@@ -478,6 +478,21 @@ class StackChanClient:
         blue: Any = None,
     ) -> dict[str, Any]:
         normalized = action.strip().lower()
+        if normalized == "sleep":
+            device_id = self.resolve_device_id()
+            payload = self._request(
+                "POST",
+                self._device_path(device_id, "sleep"),
+                authenticated=True,
+            )
+            return {
+                "ok": payload.get("status") == "ok",
+                "status": payload.get("status"),
+                "device": "configured_or_only_connected",
+                "action": normalized,
+                "session_state": payload.get("session_state"),
+                "close_reason": payload.get("close_reason"),
+            }
         if normalized == "volume":
             tool_name = "self.audio_speaker.set_volume"
             arguments = {
@@ -505,7 +520,8 @@ class StackChanClient:
             }
         else:
             raise StackChanError(
-                "control_action_invalid", "StackChan control supports volume, head, or led"
+                "control_action_invalid",
+                "StackChan control supports volume, head, led, or sleep",
             )
         device_id = self.resolve_device_id()
         payload = self._call_tool(device_id, tool_name, arguments)

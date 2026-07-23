@@ -45,7 +45,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self._json({"status": "ok", "service": "stackchan-davie-gateway", "version": "0.2.0"})
+            self._json({"status": "ok", "service": "stackchan-davie-gateway", "version": "0.3.0"})
             return
         if self.path == "/v1/capabilities":
             self._json({"capabilities": [{"id": "vision", "label": "Look and explain"}]})
@@ -88,6 +88,16 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         type(self).requests.append((self.path, body))
         if self.path == "/v1/devices/stackchan-main/say":
             self._json({"status": "accepted", "device_id": "stackchan-main"})
+            return
+        if self.path == "/v1/devices/stackchan-main/sleep":
+            self._json(
+                {
+                    "status": "ok",
+                    "device_id": "stackchan-main",
+                    "session_state": "closed",
+                    "close_reason": "admin_sleep",
+                }
+            )
             return
         if self.path == "/v1/devices/stackchan-main/vision":
             self._json(
@@ -177,7 +187,7 @@ def test_status_reports_gateway_device_and_capability_without_identity(gateway):
     result = client_module.StackChanClient(config).status()
 
     assert result["ok"] is True
-    assert result["gateway"]["version"] == "0.2.0"
+    assert result["gateway"]["version"] == "0.3.0"
     assert result["device"] == {
         "connected_count": 1,
         "configured": True,
@@ -337,6 +347,20 @@ def test_control_maps_only_allowlisted_actions(gateway, kwargs, path, arguments)
 
     assert result["ok"] is True
     assert _GatewayHandler.requests[-1] == (path, {"arguments": arguments})
+
+
+def test_control_sleep_uses_gateway_lifecycle_contract(gateway):
+    client = client_module.StackChanClient(client_module.StackChanConfig.load(gateway))
+
+    result = client.control("sleep")
+
+    assert result["ok"] is True
+    assert result["session_state"] == "closed"
+    assert result["close_reason"] == "admin_sleep"
+    assert _GatewayHandler.requests[-1] == (
+        "/v1/devices/stackchan-main/sleep",
+        {},
+    )
 
 
 @pytest.mark.parametrize(

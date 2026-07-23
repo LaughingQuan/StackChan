@@ -14,8 +14,11 @@ model, ASR, TTS, memory, and tool implementations.
    session key, preserving Davie memory and tools.
 6. Davie's short spoken response is synthesized by CosyVoice3, encoded as raw
    Opus, and streamed back through the official TTS lifecycle.
-7. Device `abort` or detected barge-in invalidates the current generation and
-   stops sending old audio immediately.
+7. Acoustic input first enters a `possible speech` state. Confirmed speech or a
+   completed user turn invalidates the current generation and stops old audio;
+   short noise bursts are discarded without cancelling Davie.
+8. A voice command, authenticated API request, or configurable inactivity
+   timeout closes the session so the device returns to wake-word mode.
 
 Secrets are read from root-owned files on the deployed host. Wi-Fi credentials,
 device tokens, and the Hermes API key must never be placed in Git.
@@ -27,6 +30,10 @@ device tokens, and the Hermes API key must never be placed in Git.
 - Stable Davie session continuity and long-term memory scoping per device.
 - Generation-safe abort and acoustic barge-in. Old audio is rejected after a
   generation is cancelled.
+- ASR quality gating for wake/name-only tails, filler-only input, impossible
+  transcript rates, and too-short noise bursts before they can call Davie.
+- Explicit session lifecycle diagnostics plus `Goodbye Davie`/`休息吧`, admin
+  sleep, and automatic idle sleep.
 - Official MCP discovery and calls for camera, head motion, LEDs, reminders,
   volume, brightness, theme, device status, and other upstream tools.
 - Camera JPEG analysis through Davie's multimodal API, bound back to the active
@@ -109,6 +116,7 @@ GET  /v1/devices
 GET  /v1/capabilities
 GET  /v1/devices/{device_id}/capabilities
 POST /v1/devices/{device_id}/say
+POST /v1/devices/{device_id}/sleep
 POST /v1/devices/{device_id}/vision
 POST /v1/devices/{device_id}/reader/load
 GET  /v1/devices/{device_id}/reader
@@ -125,6 +133,10 @@ while the device is offline; autoplay requires an active audio session.
 The official 1.4.3 firmware opens that session on wake, so immediate remote
 speech, vision, and hardware actions require the device to be awake and
 connected. Offline reader loading and persisted checkpoints do not.
+
+`GET /v1/devices` exposes lifecycle, endpoint, transcription-quality, and
+barge-in evidence. Network reachability, a connected WebSocket, or synthetic
+audio is not accepted as proof of human wake-word or audible playback quality.
 
 The camera endpoint follows the official StackChan multipart contract:
 

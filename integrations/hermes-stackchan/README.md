@@ -27,4 +27,5 @@ uv run hermes plugins enable jm-stackchan
 The official plugin command adds the `stackchan` toolset to the configured Hermes platforms.
 Immediate speech, camera, playback, and controls require StackChan to be awake in a Davie session.
 Reader content can be preloaded while the device is offline.
-
+Davie can end the active session with `stackchan_control(action="sleep")`; the
+same lifecycle is available by voice with `Goodbye Davie` or `休息吧`.

@@ -112,13 +112,13 @@ CONTROL_SCHEMA = {
     "name": "stackchan_control",
     "description": (
         "Control only the allow-listed physical functions of Davie's local StackChan body: speaker "
-        "volume, head angles, or onboard LED RGB. The robot must be awake. Do not use this for room "
-        "lights or unrelated devices, and do not invent MCP tool names."
+        "volume, head angles, onboard LED RGB, or ending the current voice session. The robot must "
+        "be awake. Do not use this for room lights or unrelated devices, and do not invent MCP tool names."
     ),
     "parameters": {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["volume", "head", "led"]},
+            "action": {"type": "string", "enum": ["volume", "head", "led", "sleep"]},
             "volume": {"type": "integer", "minimum": 0, "maximum": 100},
             "yaw": {
                 "type": "integer",

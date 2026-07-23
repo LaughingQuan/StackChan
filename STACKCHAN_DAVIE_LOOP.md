@@ -78,6 +78,13 @@ handoff:
 - 花费: ¥0；没有调用模型，回归使用固定 fixture。
 - 边界: 这是服务端防误触与证据层，不宣称已经替代真人声学标定；唤醒词阈值仍需近场/远场人工矩阵确认。
 
+### 【完成】Codex 2026-07-23 23:14 Asia/Singapore — Davie lifecycle tool and 0.3.0 release candidate
+- 发现: Gateway 已有 sleep API，但 Davie 的独立 StackChan 插件只能控制音量/头部/LED，无法主动结束自己的桌面语音会话；运行和维护文档也没有说明新门禁证据。
+- 修复: `stackchan_control` 新增严格白名单 `sleep`，调用同源受认证生命周期 API；Gateway 升级到 0.3.0，补齐环境变量示例、运行说明、质量门禁与“不把网络在线当物理通过”的验收边界。
+- 验证: Gateway 47 passed；Hermes 插件 26 passed；sdist/wheel 构建通过；compileall/diff check 通过；通用 secret 关键字扫描只命中既有配置/测试引用，未发现本轮新增凭据。
+- 花费: ¥0。
+- 边界: 尚未更新已安装插件和 Rock5B 生产服务；下一阶段先提交原子变更，再执行备份、部署和 live smoke。
+
 
 ### 【完成】Codex 2026-07-23 03:05 Asia/Singapore — official StackChan 1.4.3 Davie local runtime
 - 发现: stock firmware already provided the required camera, duplex audio, motion, OTA, MCP, provisioning, and AI Agent lifecycle; the narrowest maintainable design was an upstream-first build flag plus a decoupled Xiaozhi/Davie gateway. A live vision-follow-up bug was also found: camera requests used a stable memory key instead of the active spoken session.

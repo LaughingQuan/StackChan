@@ -193,7 +193,7 @@ class StackChanSession:
                             "token": self.settings.device_token,
                         }
                     },
-                    "clientInfo": {"name": "stackchan-davie-gateway", "version": "0.2.0"},
+                    "clientInfo": {"name": "stackchan-davie-gateway", "version": "0.3.0"},
                 },
                 purpose="initialize",
             )
@@ -771,6 +771,7 @@ class StackChanSession:
                 await self.transport.send_json(
                     {"session_id": self.session_id, "type": "tts", "state": "stop"}
                 )
+                self._mark_activity("response_completed")
                 if not self.closed:
                     self._set_state("listening" if self.listening else "ready")
 
