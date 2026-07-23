@@ -28,6 +28,29 @@ def test_endpoint_ignores_noise_then_commits_speech() -> None:
         completed = detector.feed(_frame(20)).complete_pcm or completed
     assert completed is not None
     assert len(completed) > 5 * 960 * 2
+    status = detector.snapshot()
+    assert status["rms"] == 20
+    assert status["threshold"] >= 400
+    assert status["speaking"] is False
+    assert status["completed_turns"] == 1
+
+
+def test_endpoint_snapshot_exposes_live_noise_and_candidate_state() -> None:
+    detector = PcmEndpointDetector(
+        frame_duration_ms=60,
+        silence_ms=300,
+        min_speech_ms=180,
+        max_turn_ms=5000,
+        min_rms=400,
+    )
+    detector.feed(_frame(100))
+    detector.feed(_frame(900))
+    status = detector.snapshot()
+    assert status["rms"] == 900
+    assert status["threshold"] >= 400
+    assert status["noise_floor"] > 0
+    assert status["candidate_ms"] == 60
+    assert status["speaking"] is False
 
 
 def test_pcm_wav_round_trip() -> None:

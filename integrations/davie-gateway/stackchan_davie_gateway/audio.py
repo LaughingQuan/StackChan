@@ -150,6 +150,10 @@ class PcmEndpointDetector:
         self.min_rms = min_rms
         self.start_frames = max(2, 120 // frame_duration_ms)
         self.pre_roll_frames = max(2, 300 // frame_duration_ms)
+        self._last_rms = 0
+        self._last_threshold = min_rms
+        self._completed_turns = 0
+        self._discarded_flushes = 0
         self.reset()
 
     def reset(self) -> None:
@@ -167,6 +171,8 @@ class PcmEndpointDetector:
     def feed(self, pcm_s16le: bytes) -> EndpointResult:
         rms = pcm_rms(pcm_s16le)
         threshold = self._threshold()
+        self._last_rms = rms
+        self._last_threshold = threshold
         voiced = rms >= threshold
         speech_started = False
 
@@ -201,16 +207,33 @@ class PcmEndpointDetector:
             return EndpointResult(rms=rms, threshold=threshold)
 
         captured = b"".join(self._frames)
+        self._completed_turns += 1
         self.reset()
         return EndpointResult(complete_pcm=captured, rms=rms, threshold=threshold)
 
     def flush(self) -> bytes | None:
         if not self._frames or self._voiced_frames < self.min_speech_frames:
+            self._discarded_flushes += 1
             self.reset()
             return None
         captured = b"".join(self._frames)
+        self._completed_turns += 1
         self.reset()
         return captured
+
+    def snapshot(self) -> dict[str, int | float | bool]:
+        return {
+            "rms": self._last_rms,
+            "threshold": self._last_threshold,
+            "noise_floor": round(self._noise_floor, 1),
+            "speaking": self._speaking,
+            "candidate_ms": self._candidate_frames * self.frame_duration_ms,
+            "voiced_ms": self._voiced_frames * self.frame_duration_ms,
+            "silence_ms": self._silence_frames * self.frame_duration_ms,
+            "captured_ms": len(self._frames) * self.frame_duration_ms,
+            "completed_turns": self._completed_turns,
+            "discarded_flushes": self._discarded_flushes,
+        }
 
 
 def pcm_to_wav(pcm_s16le: bytes, sample_rate: int) -> bytes:

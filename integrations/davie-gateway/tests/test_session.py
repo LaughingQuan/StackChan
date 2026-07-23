@@ -63,6 +63,11 @@ class NoDavie:
         raise AssertionError("local device actions must not call Davie")
 
 
+class EmptyMedia(FakeMedia):
+    async def transcribe(self, _wav: bytes, *, hotwords: list[str]) -> str:
+        return ""
+
+
 def _pcm_frame(amplitude: int) -> bytes:
     return struct.pack("<960h", *([amplitude] * 960))
 
@@ -98,7 +103,38 @@ async def test_session_runs_turn_and_sends_audio() -> None:
     assert any(item.get("type") == "stt" and item.get("text") == "Hello Davie" for item in transport.json)
     assert any(item.get("type") == "tts" and item.get("state") == "start" for item in transport.json)
     assert any(item.get("type") == "tts" and item.get("state") == "stop" for item in transport.json)
+    assert session.status()["endpoint"]["completed_turns"] == 1
     assert transport.binary
+    await session.close()
+
+
+async def test_realtime_empty_transcript_keeps_listening_without_failure_alert() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(endpoint_silence_ms=180, endpoint_min_speech_ms=120, endpoint_min_rms=300),
+        media=EmptyMedia(),
+        davie=NoDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    await session.handle_text('{"type":"listen","state":"start","mode":"realtime"}')
+    for _ in range(4):
+        await session.handle_binary(_pcm_frame(1800))
+    for _ in range(5):
+        await session.handle_binary(_pcm_frame(10))
+    assert session.response_task is not None
+    await asyncio.wait_for(session.response_task, timeout=2)
+    assert session.listening is True
+    assert session.empty_transcript_count == 1
+    assert session.last_error == "asr_empty_transcript"
+    assert not any(item.get("type") == "alert" for item in transport.json)
     await session.close()
 
 

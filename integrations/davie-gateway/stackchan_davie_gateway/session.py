@@ -95,6 +95,7 @@ class StackChanSession:
         self.audio_frames_sent = 0
         self.interrupt_count = 0
         self.turn_count = 0
+        self.empty_transcript_count = 0
         self.mcp_tools: dict[str, dict[str, Any]] = {}
         self.mcp_initialized = False
         self._mcp_request_id = 0
@@ -322,15 +323,21 @@ class StackChanSession:
             if generation != self.generation_id:
                 return
             if not transcript:
-                await self.transport.send_json(
-                    {
-                        "session_id": self.session_id,
-                        "type": "alert",
-                        "status": "Listening",
-                        "message": "I did not catch that. Please try again.",
-                        "emotion": "neutral",
-                    }
-                )
+                self.empty_transcript_count += 1
+                self.last_error = "asr_empty_transcript"
+                # Realtime audio can contain a wake chime tail or a short burst
+                # of ambient noise. Keep listening instead of replacing the UI
+                # with a misleading failure message.
+                if self.listen_mode != "realtime":
+                    await self.transport.send_json(
+                        {
+                            "session_id": self.session_id,
+                            "type": "alert",
+                            "status": "Listening",
+                            "message": "I did not catch that. Please try again.",
+                            "emotion": "neutral",
+                        }
+                    )
                 return
             self.last_transcript = transcript
             await self.transport.send_json(
@@ -725,6 +732,7 @@ class StackChanSession:
             "listen_mode": self.listen_mode,
             "generation_id": self.generation_id,
             "turn_count": self.turn_count,
+            "empty_transcript_count": self.empty_transcript_count,
             "interrupt_count": self.interrupt_count,
             "audio_frames_received": self.audio_frames_received,
             "audio_frames_sent": self.audio_frames_sent,
@@ -735,5 +743,6 @@ class StackChanSession:
             "mcp_initialized": self.mcp_initialized,
             "mcp_tool_count": len(self.mcp_tools),
             "mcp_tools": sorted(self.mcp_tools),
+            "endpoint": self.endpoint.snapshot(),
             "reader": self.reader.status(),
         }

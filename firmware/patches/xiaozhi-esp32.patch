@@ -1,11 +1,13 @@
 diff --git a/main/audio/wake_words/custom_wake_word.cc b/main/audio/wake_words/custom_wake_word.cc
-index 982bbe9..9de8e8f 100644
+index 982bbe9..3de687b 100644
 --- a/main/audio/wake_words/custom_wake_word.cc
 +++ b/main/audio/wake_words/custom_wake_word.cc
-@@ -9,6 +9,10 @@
+@@ -9,6 +9,11 @@
  #include <esp_mn_speech_commands.h>
  #include <cJSON.h>
- 
+-
++#include <algorithm>
++
 +extern "C" {
 +#include <flite_g2p.h>
 +}
@@ -13,7 +15,21 @@ index 982bbe9..9de8e8f 100644
  #define TAG "CustomWakeWord"
  
  CustomWakeWord::CustomWakeWord()
-@@ -120,7 +124,23 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list)
+@@ -62,6 +67,13 @@ void CustomWakeWord::ParseWakenetModelConfig() {
+         }
+         if (cJSON_IsNumber(threshold)) {
+             threshold_ = threshold->valuedouble;
++            // Assets produced before this fix stored the Kconfig percentage
++            // (for example 8) instead of MultiNet's normalized value (0.08).
++            if (threshold_ > 1.0f) {
++                threshold_ /= 100.0f;
++            }
++            threshold_ = std::clamp(threshold_, 0.01f, 0.99f);
++            ESP_LOGI(TAG, "Using normalized detection threshold: %.2f", threshold_);
+         }
+         if (cJSON_IsArray(commands)) {
+             for (int i = 0; i < cJSON_GetArraySize(commands); i++) {
+@@ -120,7 +132,23 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list)
      multinet_->set_det_threshold(multinet_model_data_, threshold_);
      esp_mn_commands_clear();
      for (int i = 0; i < commands_.size(); i++) {
@@ -106,6 +122,14 @@ index d69d43d..3b6f07e 100644
  }
  
  void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
+@@ -895,5 +898,6 @@ void Application::HandleStateChangedEvent() {
+ #ifdef CONFIG_WAKE_WORD_DETECTION_IN_LISTENING
+-            // Enable wake word detection in listening mode (configured via Kconfig)
++            // Custom MultiNet and AFE voice processing share the audio task.
++            // Running both in realtime mode can starve the ESP32 watchdog.
+             audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
+ #else
+             // Disable wake word detection in listening mode
 diff --git a/main/assets.cc b/main/assets.cc
 index ad61944..6b84daf 100644
 --- a/main/assets.cc
