@@ -665,10 +665,13 @@ def test_live_state_hook_prefetches_truthful_device_evidence(gateway, monkeypatc
     )
 
     assert hint is not None
-    assert '"physical_status":"active_session"' in hint["context"]
+    assert "physical_status=active_session" in hint["context"]
     assert "dark screen may be normal display sleep" in hint["context"]
     assert "pending_human" in hint["context"]
-    assert "Exact prepared answer" in hint["context"]
+    assert "Prepared answer" in hint["context"]
+    assert hint["contract_id"] == "davie.stackchan.live_state.v1"
+    assert hint["priority"] == 100
+    assert len(hint["context"].encode("utf-8")) <= 1536
     assert "stackchan-main" not in hint["context"]
     assert _GatewayHandler.token not in hint["context"]
 
@@ -686,10 +689,10 @@ def test_live_state_hook_reports_no_session_without_claiming_offline(gateway, mo
     )
 
     assert hint is not None
-    assert '"gateway_reachable":true' in hint["context"]
-    assert '"physical_status":"no_active_session"' in hint["context"]
-    assert "Do not call any tool" in hint["context"]
-    assert "call stackchan_status again" in hint["context"]
+    assert "gateway_reachable=True" in hint["context"]
+    assert "physical_status=no_active_session" in hint["context"]
+    assert "Do not call tools" in hint["context"]
+    assert len(hint["context"].encode("utf-8")) <= 1536
 
 
 @pytest.mark.parametrize(

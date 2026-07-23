@@ -409,7 +409,7 @@ def _handle_current_state_pre_gateway_dispatch(**kwargs: Any) -> dict[str, str]:
     return {"action": "allow"}
 
 
-def stackchan_pre_llm_hint(**kwargs: Any) -> dict[str, str] | None:
+def stackchan_pre_llm_hint(**kwargs: Any) -> dict[str, Any] | None:
     """Inject current physical-state evidence when the user explicitly asks for it."""
     user_message = str(kwargs.get("user_message") or "").strip()
     if (
@@ -425,27 +425,27 @@ def stackchan_pre_llm_hint(**kwargs: Any) -> dict[str, str] | None:
         chinese=bool(re.search(r"[\u3400-\u9fff]", user_message)),
     )
 
-    compact_evidence = json.dumps(
-        evidence,
-        ensure_ascii=False,
-        separators=(",", ":"),
-        sort_keys=True,
+    live_state = evidence.get("live_state")
+    if not isinstance(live_state, dict):
+        live_state = {}
+    evidence_summary = (
+        f"gateway_reachable={evidence.get('gateway_reachable') is True}; "
+        f"physical_status={live_state.get('physical_status') or 'unknown'}; "
+        "wake_touch_audio_acceptance=pending_human"
     )
     return {
+        "contract_id": "davie.stackchan.live_state.v1",
+        "source": "jm-stackchan-authenticated-live-query",
+        "priority": 100,
         "context": (
-            "[StackChan current-state evidence]\n"
-            "A live local StackChan status query for this exact turn has already completed. "
-            "Return the exact prepared answer below and stop. Do not call any tool, inspect the "
-            "host display, ask what StackChan means, invent Docker/container/monitoring checks, "
-            "or call stackchan_status again. "
-            "Distinguish Gateway reachability from an active physical device session. "
-            "A dark screen may be normal display sleep and is not proof that the robot is offline. "
-            "The screen-tap fallback is loaded in firmware, but its physical acceptance remains "
-            "pending_human until a person confirms the real touch interaction. Never describe "
-            "wake-word, touch, speaker, or microphone behavior as human-verified unless the "
-            "evidence explicitly says so.\n"
-            f"Exact prepared answer:\n{exact_response}\n"
-            f"Live evidence JSON: {compact_evidence}"
+            "[StackChan authenticated live-state contract]\n"
+            "This exact turn already has a complete authenticated local answer. Return the prepared "
+            "answer verbatim and stop. Do not call tools, inspect the host display, ask what "
+            "StackChan means, or invent Docker, Rock5B-body, power, Wi-Fi, audio, or touch checks. "
+            "Gateway reachability is not an active physical session, and a dark screen may be "
+            "normal display sleep.\n"
+            f"Prepared answer:\n{exact_response}\n"
+            f"Minimal evidence: {evidence_summary}"
         )
     }
 
