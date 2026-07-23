@@ -707,7 +707,7 @@ class StackChanClient:
                 physical_device_session_active if device_query_succeeded else False
             ),
         }
-        manifest = self.capabilities()
+        manifest = self.capabilities() if include_capabilities else {}
         voice_session = manifest.get("voice_session")
         if isinstance(voice_session, dict):
             result["human_operations"] = voice_session

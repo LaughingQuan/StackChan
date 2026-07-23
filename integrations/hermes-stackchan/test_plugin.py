@@ -32,6 +32,7 @@ plugin_module = _load_module("jm_stackchan_test", HERE / "__init__.py")
 class _GatewayHandler(BaseHTTPRequestHandler):
     token = "test-admin-token"
     devices = [{"device_id": "stackchan-main", "state": "listening"}]
+    paths = []
     requests = []
     reader = {"state": "idle", "title": "", "index": 0, "total": 0}
 
@@ -47,6 +48,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def do_GET(self):
+        type(self).paths.append(self.path)
         if self.path == "/health":
             self._json({"status": "ok", "service": "stackchan-davie-gateway", "version": "0.3.0"})
             return
@@ -283,6 +285,7 @@ class _GatewayHandler(BaseHTTPRequestHandler):
 @pytest.fixture
 def gateway(tmp_path):
     _GatewayHandler.devices = [{"device_id": "stackchan-main", "state": "listening"}]
+    _GatewayHandler.paths = []
     _GatewayHandler.requests = []
     _GatewayHandler.reader = {"state": "idle", "title": "", "index": 0, "total": 0}
     server = ThreadingHTTPServer(("127.0.0.1", 0), _GatewayHandler)
@@ -376,6 +379,8 @@ def test_status_does_not_treat_gateway_health_as_robot_presence(gateway):
     assert result["device"]["connected_count"] == 0
     assert result["device"]["ready_for_immediate_output"] is False
     assert "Do not report the robot as ready or online" in result["live_state"]["safe_current_status"]
+    assert result["human_operations"]["wake"]["fallback"]["method"] == "screen_tap"
+    assert _GatewayHandler.paths.count("/v1/capabilities") == 0
 
 
 def test_http_credential_failure_never_leaks_token(gateway):
