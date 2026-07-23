@@ -317,7 +317,7 @@ wheels = [
 
 [[package]]
 name = "stackchan-davie-gateway"
-version = "0.3.3"
+version = "0.3.11"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },

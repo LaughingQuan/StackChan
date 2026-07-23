@@ -11,9 +11,12 @@ model, ASR, TTS, memory, and tool implementations.
 3. The gateway decodes frames and performs adaptive endpointing.
 4. Completed speech is sent to the NVIDIA media gateway's Fun-ASR service.
 5. Text is sent to the authenticated Hermes API server with a stable per-device
-   session key, preserving Davie memory and tools.
-6. Davie's short spoken response is synthesized by CosyVoice3, encoded as raw
-   Opus, and streamed back through the official TTS lifecycle.
+   session key. Davie's response is consumed as an SSE token stream, preserving
+   memory and tools while allowing the first complete sentence to enter TTS
+   before later text has finished.
+6. CosyVoice3 synthesizes bounded speech units. The gateway prepares the next
+   unit while the current PCM is playing, encodes it as raw Opus, and sends it
+   through the official TTS lifecycle.
 7. Acoustic input first enters a `possible speech` state. Confirmed speech or a
    completed user turn invalidates the current generation and stops old audio;
    short noise bursts are discarded without cancelling Davie.
@@ -33,9 +36,17 @@ device tokens, and the Hermes API key must never be placed in Git.
 - ASR quality gating for wake/name-only tails, filler-only input, impossible
   transcript rates, and too-short noise bursts before they can call Davie.
 - Generation-safe per-turn timing for input audio, ASR, Davie/vision, response
-  readiness, TTS synthesis, first audio, streamed audio, and total completion.
+  readiness, first text, per-sentence TTS synthesis, first audio, post-first
+  audio gap, streamed audio, and total completion.
   Empty, rejected, cancelled, superseded, failed, device-action, and completed
   turns are distinguished instead of being averaged together.
+- Per-turn language routing keeps English turns in English and Chinese turns in
+  Chinese without rewriting the user transcript or changing stored preference.
+  If Hermes finishes a stream with no text and no progress/tool event, the
+  gateway retries once with the non-streaming API. It never retries an empty
+  stream after progress events, avoiding duplicate side effects.
+- Spoken output removes Markdown, URLs, code fences, and leading list markers
+  before TTS. The stored user transcript remains unchanged.
 - Explicit session lifecycle diagnostics plus `Goodbye Davie`/`休息吧`, admin
   sleep, and automatic idle sleep.
 - Official MCP discovery and calls for camera, head motion, LEDs, reminders,
@@ -74,6 +85,7 @@ Live local voice and camera smokes:
 
 ```bash
 uv run python scripts/live_smoke.py
+STACKCHAN_SMOKE_PROMPT="Explain this briefly." uv run python scripts/live_smoke.py
 uv run python scripts/lifecycle_smoke.py
 uv run python scripts/vision_smoke.py --prompt "Describe this image." /path/to/image.jpg
 ```
@@ -143,11 +155,18 @@ connected. Offline reader loading and persisted checkpoints do not.
 `GET /v1/devices` exposes lifecycle, endpoint, transcription-quality,
 `last_turn_timing`, and barge-in evidence. `first_audio_ms` is measured from
 endpoint commit until the first encoded audio frame is accepted by the device
-transport; `streamed_audio_ms` is media duration, not wall-clock latency.
+transport. `first_text_to_first_audio_ms` isolates first-unit TTS preparation,
+and `post_first_audio_gap_ms` measures non-playback wall time after first audio.
+`streamed_audio_ms` is media duration, not wall-clock latency.
 Network reachability, a connected WebSocket, or synthetic audio is not accepted
 as proof of human wake-word or audible playback quality. After a device
 disconnects, the same bounded diagnostic summary remains in
 `GET /v1/sessions/recent`; raw audio is never retained.
+
+The current NVIDIA CosyVoice worker returns a complete synthesized artifact for
+each speech unit. Sentence prefetch hides most later synthesis, but it is not
+the same as a true chunk-streaming TTS backend. Keep this distinction when
+comparing protocol timing with human-perceived latency.
 
 The camera endpoint follows the official StackChan multipart contract:
 

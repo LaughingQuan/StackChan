@@ -249,3 +249,11 @@ handoff:
 - 花费: ¥0；仅使用本地 Fun-ASR、Davie 和 CosyVoice。
 - 边界: 没有把协议 canary 当做人耳证据，没有调用付费模型，没有修改 Davie executor/proactivity。
 - 后续: 优先调查 Davie token stream 与 CosyVoice chunk stream 的首音频流水线；不要继续压缩 900ms 端点静音来换取表面速度。
+
+### 【完成】Codex 2026-07-24 03:06 Asia/Singapore — pipelined spoken response and bilingual recovery
+- 发现: 原链路必须等待 Davie 全文后逐句串行 TTS；三句回复后续非播放空隙约 5.907 秒。英文输入还可能受持久化偏好影响改用中文；Hermes 对一个中文回合可出现正常 SSE 结束但零正文，而非流式同请求有正文。
+- 修复: Gateway 0.3.11 接入 Hermes SSE；首个完整句在后文生成期间进入 TTS，当前 PCM 播放时仅预取下一句。增加 generation-safe 首个非空文本 delta、逐句 TTS、首音频和后续空隙指标；按当前回合确定中英文；仅对“无正文且无工具/进度事件”的干净空流降级一次非流式；朗读前去除 URL、Markdown、代码块和句首项目符号。
+- 验证: Gateway 60 passed；Hermes 插件与安装器 28 passed；ruff、compileall、wheel/sdist、diff check 通过。生产 0.3.11 英文、中文、lifecycle 三类完整协议 smoke 均通过。英文三句首个文本 delta 2.762 秒、首音频 5.927 秒、首音频后非播放空隙 1.271 秒；中文空流兼容回合首个文本 delta 1.088 秒、首音频 3.616 秒且保持中文。设备 20 包 0% 丢包，平均 5.487ms；Rock5B Gateway、NVIDIA ASR/TTS 和 Hermes 0.18.2 均健康，生产日志无新异常。Knowledge Atlas 中英文能力卡完成 ETag 更新、HTML 校验与 AnythingLLM `synced`；Davie 精确检索能返回空流规则和 release identifier `0.3.11`。
+- 花费: ¥0；全部使用本地 Fun-ASR、Qwen/Davie 与 CosyVoice。
+- 边界: 未调用付费模型，未修改 Davie executor/proactivity；合成 canary 只能证明协议和音频数据链路，真人唤醒率、人耳音质、房间回声和播放中打断仍需现场验收。
+- 后续: 将当前未版本化的 NVIDIA media-gateway 纳入独立仓库后，再隔离评估 CosyVoice vLLM/TensorRT 真 chunk streaming；不要直接改生产 worker。Davie 的通用“current version”确定性健康路由会把 Stack-chan 版本问句误判成 Hermes Gateway 状态，精确知识检索不受影响；该路由应在独立 Davie 变更中修复，不能混入本仓库。

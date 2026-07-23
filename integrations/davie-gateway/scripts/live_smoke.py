@@ -20,6 +20,10 @@ async def run() -> None:
     media_url = os.environ.get(
         "STACKCHAN_SMOKE_MEDIA_URL", "http://media-gateway.local:8790"
     )
+    prompt = os.environ.get(
+        "STACKCHAN_SMOKE_PROMPT",
+        "Hello Davie. Please answer with one short sentence.",
+    )
     device_id = f"stackchan-smoke-{os.getpid()}"
     started = time.monotonic()
 
@@ -31,9 +35,7 @@ async def run() -> None:
     input_codec = OpusCodec(16000, 16000, 60)
     output_codec = OpusCodec(24000, 24000, 60)
     try:
-        source_wav = await media.synthesize(
-            "Hello Davie. Please answer with one short sentence."
-        )
+        source_wav = await media.synthesize(prompt)
         source_pcm = await wav_to_pcm_async(source_wav, 16000)
         source_pcm += b"\0" * (16000 * 2 * 2)
 
@@ -135,6 +137,7 @@ async def run() -> None:
             json.dumps(
                 {
                     "status": "passed",
+                    "device_id": device_id,
                     "event_types": sorted(set(events)),
                     "output_pcm_bytes": output_pcm_bytes,
                     "elapsed_seconds": round(time.monotonic() - started, 3),

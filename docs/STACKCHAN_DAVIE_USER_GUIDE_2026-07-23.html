@@ -62,7 +62,8 @@
   <p>不新增一套重复的复杂菜单。默认进入官方 AI Agent 界面，屏幕会用 <code>Listening</code>、<code>Looking</code>、<code>Reading</code>、<code>Speaking</code> 等状态告诉你当前动作。需要配网、音量、开机行为或其他官方功能时，再回到官方 Launcher 与 Settings。</p>
   <div class="note"><strong>开机行为：</strong>Davie 版本在没有用户偏好时默认进入语音待命。如果你在 Settings 关闭“Start AI Agent on boot”，该明确选择会被保留，不会被固件强制覆盖。</div>
   <div class="note"><strong>交互延迟：</strong>常接电的 Davie 固件会让 Wi-Fi 保持低延迟性能模式，显示屏仍可按原策略休眠。实测空闲网络平均往返从约 460ms 降至约 4.3ms；这能改善唤醒后的首包和远程控制，但不等于本地模型生成本身只需 4ms。</div>
-  <div class="note"><strong>慢在哪里可以查清：</strong>Gateway 0.3.3 会按回合记录输入音频、ASR、Davie、TTS、首音频和总耗时。维护时应先查看 <code>last_turn_timing</code>，再决定优化端点、模型还是语音合成，避免为了“快”而缩短自然停顿或降低答案质量。</div>
+  <div class="note"><strong>慢在哪里可以查清：</strong>Gateway 0.3.11 会按回合记录输入音频、ASR、首个非空文本 delta、Davie、每段 TTS、首音频、首音频后的非播放空隙和总耗时。Davie 的第一句会在后续文字生成期间提前进入 TTS，下一句也会在当前声音播放时预先合成。维护时应先查看 <code>last_turn_timing</code>，再决定优化端点、模型还是语音合成，避免为了“快”而缩短自然停顿或降低答案质量。</div>
+  <div class="note"><strong>中英文如何处理：</strong>每个语音回合会根据当前转写单独确定回答语言，不修改你的原话，也不改长期偏好。纯英文默认用英文，纯中文默认用中文，中英混合按主要语言回答并保留待解释的原词。若 Hermes 流式接口正常结束却没有正文，Gateway 只会在没有工具或进度事件时安全重试一次非流式请求。</div>
 
   <h2>伴读如何使用</h2>
   <p>书籍或文章由 Davie、Web、Telegram 或其他客户端通过认证 API 装载到 Gateway。内容和句子级进度保存在 Gateway，不依赖 TF 卡，设备重启后仍可继续。TF 卡未来可用于离线书库，但不是当前接入的必要条件。</p>

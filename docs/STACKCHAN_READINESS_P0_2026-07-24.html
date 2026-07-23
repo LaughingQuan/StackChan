@@ -33,27 +33,30 @@
     <thead><tr><th>能力</th><th>实现</th><th>验证状态</th></tr></thead>
     <tbody>
       <tr><td>直接唤醒</td><td>唯一命令改为 <code>DAVIE</code>，保留官方 MultiNet5 English Q8；固件已构建、备份和刷入，启动日志确认注册为 <code>D d V m</code>。</td><td><span class="ok tag">LOADED</span></td></tr>
-      <tr><td>会话生命周期</td><td><code>connecting / ready / listening / transcribing / thinking / speaking / sleeping / closed</code>，记录时间、原因和 close reason。</td><td><span class="ok tag">51 TESTS</span></td></tr>
+      <tr><td>会话生命周期</td><td><code>connecting / ready / listening / transcribing / thinking / speaking / sleeping / closed</code>，记录时间、原因和 close reason。</td><td><span class="ok tag">60 TESTS</span></td></tr>
       <tr><td>休眠与退出</td><td>支持 “Goodbye Davie / Go to sleep / 休息吧”、受认证管理 API，以及默认 120 秒无活动自动休眠。</td><td><span class="ok tag">LIVE SMOKE</span></td></tr>
       <tr><td>打断</td><td>短声先成为 possible speech；只有累计 360ms 有效人声或完整用户回合才确认打断，随后取消旧 generation。</td><td><span class="ok tag">CONTRACT PASS</span></td></tr>
       <tr><td>ASR 质量门禁</td><td>保留采集时长、有效语音、RMS、语言和 CTC；过滤纯唤醒、名字重复、纯 filler 和异常语速。</td><td><span class="ok tag">UNIT PASS</span></td></tr>
       <tr><td>唤醒后自然开口</td><td>第一次空转写保持 Listening；只有非实时模式连续两次空转写才提示重试，非空转写会重置连续计数。</td><td><span class="ok tag">REGRESSION PASS</span></td></tr>
       <tr><td>低延迟网络</td><td>Davie 固件默认让 Wi-Fi 保持 <code>PERFORMANCE / WIFI_PS_NONE</code>，显示休眠仍保留；如未来改用电池，可通过独立 Kconfig 开关恢复省电。</td><td><span class="ok tag">109× FASTER</span></td></tr>
-      <tr><td>可观察性</td><td>在线状态和最近 20 个已关闭会话均可查；每回合分别记录输入、ASR、Davie、TTS、首音频与总耗时，仅保存结构化摘要，不保存原始音频。</td><td><span class="ok tag">0.3.3 LIVE</span></td></tr>
+      <tr><td>流式回复与预取</td><td>Davie SSE 第一完整句可在后续文字生成时进入 TTS；当前声音播放期间只预取下一句，队列有界且 generation 取消后拒绝旧音频。</td><td><span class="ok tag">0.3.11 LIVE</span></td></tr>
+      <tr><td>中英文回合路由</td><td>当前回合独立确定回答语言，不改写 transcript 或长期记忆。上游流式空正文仅在无工具/进度事件时安全降级一次，Markdown 符号不会进入朗读。</td><td><span class="ok tag">ZH/EN PASS</span></td></tr>
+      <tr><td>可观察性</td><td>在线状态和最近 20 个已关闭会话均可查；每回合分别记录输入、ASR、首个非空文本 delta、Davie、逐句 TTS、首音频、句间空隙与总耗时，仅保存结构化摘要，不保存原始音频。</td><td><span class="ok tag">0.3.11 LIVE</span></td></tr>
       <tr><td>Davie 工具</td><td><code>stackchan_status</code> 区分 Gateway、物理设备会话与未知状态；<code>stackchan_control(action="sleep")</code> 可从 Telegram、飞书、Web/CLI 关闭语音会话。</td><td><span class="ok tag">LIVE</span></td></tr>
     </tbody>
   </table>
 
   <h2>验证证据</h2>
   <ul>
-    <li>Gateway 自动化回归：51 项通过；Hermes Stack-chan 插件与安装器：28 项通过。</li>
+    <li>Gateway 自动化回归：60 项通过；Hermes Stack-chan 插件与安装器：28 项通过；lint、compileall、wheel/sdist 和 diff check 通过。</li>
     <li>刷写后的完整本地语音协议 smoke：<code>hello → STT → LLM → TTS</code> 通过，得到 216,000 bytes PCM，约 11.116 秒完成。</li>
     <li>生命周期 smoke：ready 状态、管理员 sleep、设备 Sleeping 事件和 WebSocket 关闭全部通过。</li>
     <li>固件 host test：1/1；ESP-IDF 5.5.4 全量及增量构建通过，应用镜像 4,407,328 bytes，分区保留 15%。</li>
     <li>设备启动：固件 1.4.3、16MB Flash、8MB PSRAM、摄像头、触摸、RTC、IMU、舵机、双工音频、Wi-Fi 与本地 Gateway 全部初始化成功。</li>
     <li>低延迟 Wi-Fi：相同 20 包测试从 <code>459.846ms avg / 928.146ms max</code> 降为 <code>4.217ms avg / 11.398ms max</code>；空闲后复测仍为 <code>4.303ms avg / 11.644ms max</code>，两次均 0% 丢包。</li>
     <li>串口启动日志确认固件执行 <code>Davie low-latency Wi-Fi keeps performance mode</code>、<code>PERFORMANCE (NONE)</code> 和 <code>Set ps type: 0</code>，不是仅凭构建配置推断。</li>
-    <li>生产 Gateway 已升级到 <code>0.3.3</code>；真实本地 canary 从端点提交到首音频为 <code>3.927s</code>，其中 Gateway ASR <code>0.286s</code>、Davie <code>2.399s</code>、TTS 准备 <code>1.228s</code>，随后按实时速度发送 <code>2.940s</code> 音频。</li>
+    <li>生产 Gateway 已升级到 <code>0.3.11</code>。三句英文完整链路正确保留英文：ASR <code>0.398s</code>、首个文本 delta <code>2.762s</code>、首音频 <code>5.927s</code>、首文本到首音频 <code>3.166s</code>、首音频后的非播放空隙 <code>1.271s</code>，三段音频完整返回。</li>
+    <li>短英文回合完整协议约 <code>9.785s</code>；中文回合在复现 Hermes 空流后通过受限非流式降级恢复，首个文本 delta <code>1.088s</code>、首音频 <code>3.616s</code>，回复保持中文且朗读文本无项目符号。</li>
     <li>NAS 恢复性：低延迟固件刷写前新增完整 16MB 镜像，SHA-256 为 <code>1fe5ee648b42bf053f894839df9c8b6064fdea7da3e640972c89a973aecd28e1</code>，校验通过。</li>
   </ul>
 
@@ -61,7 +64,8 @@
 
   <h2>状态判断规则</h2>
   <p>Knowledge Atlas 记录的是能力、操作方法和历史证据，不代表机器人此刻在线。Davie 在回答“现在能不能用、是否已连接、是否醒着”之前必须调用 <code>stackchan_status</code>。结果中的 <code>gateway_reachable</code> 只证明桥接服务可达；只有 <code>live_state.physical_device_session_active=true</code> 才证明当前存在物理设备会话。人耳是否听到声音仍必须由真人确认。</p>
-  <p><code>last_turn_timing</code> 用于定位延迟而不是包装性能。<code>input_audio_ms</code> 是本轮送入 ASR 的音频时长；<code>first_audio_ms</code> 从端点提交开始计算，到第一帧输出成功为止；<code>streamed_audio_ms</code> 是音频媒体长度，属于正常播放时间，不应与模型等待混为一谈。取消或拒绝回合单独标记，不会污染完成回合的数据。</p>
+  <p><code>last_turn_timing</code> 用于定位延迟而不是包装性能。<code>input_audio_ms</code> 是本轮送入 ASR 的音频时长；<code>first_text_ms</code> 是首个非空 SSE 文本 delta；<code>first_audio_ms</code> 从端点提交开始计算，到第一帧输出成功为止；<code>first_text_to_first_audio_ms</code> 包含凑齐第一完整句和首段 TTS 的等待；<code>post_first_audio_gap_ms</code> 是首音频之后扣除正常播放时间的等待；<code>streamed_audio_ms</code> 是音频媒体长度。取消或拒绝回合单独标记，不会污染完成回合的数据。</p>
+  <p>当前 NVIDIA CosyVoice worker 仍按“完整语音片段”返回，并非模型级音频 chunk streaming。Gateway 的逐句预取显著减少后续句间等待，但不会把现有 TTS 包装成 150ms 首包。后续若升级 vLLM/TensorRT TTS backend，应另建版本化 media-gateway 项目做隔离 canary。</p>
   <p>Wi-Fi 策略依据 <a href="https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/wifi-driver/wifi-performance-and-power-save.html">Espressif 官方性能说明</a>：<code>WIFI_PS_NONE</code> 可将实时接收延迟降到最低；modem-sleep 会受 DTIM/listen interval 影响。Stack-chan 是常接电桌面终端，因此交互延迟优先于电池续航。</p>
 
   <h2>现在怎么用</h2>

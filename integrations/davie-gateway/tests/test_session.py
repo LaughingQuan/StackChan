@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import struct
-from dataclasses import dataclass
 
 from stackchan_davie_gateway.audio import pcm_to_wav
 from stackchan_davie_gateway.capabilities import DeviceAction
@@ -139,9 +138,14 @@ async def test_session_runs_turn_and_sends_audio() -> None:
     assert timing["llm_ms"] >= 0
     assert timing["response_ready_ms"] >= timing["asr_ms"]
     assert timing["tts_synthesis_ms"] >= 0
+    assert timing["tts_sentence_count"] == 2
+    assert timing["tts_first_sentence_ms"] >= 0
+    assert timing["tts_max_sentence_ms"] >= timing["tts_first_sentence_ms"]
     assert timing["first_audio_ms"] >= timing["response_ready_ms"]
     assert timing["streamed_audio_ms"] > 0
     assert timing["total_ms"] >= timing["first_audio_ms"]
+    assert timing["first_text_to_first_audio_ms"] >= 0
+    assert timing["post_first_audio_gap_ms"] >= 0
     await session.close()
 
 
@@ -522,6 +526,194 @@ async def test_cancelled_turn_timing_does_not_overwrite_next_generation() -> Non
     assert completed_timing["generation_id"] > cancelled_timing["generation_id"]
     assert completed_timing["outcome"] == "completed"
     assert completed_timing["first_audio_ms"] is not None
+    await session.close()
+
+
+async def test_streamed_first_sentence_reaches_audio_before_davie_finishes() -> None:
+    class StreamingDavie:
+        def __init__(self):
+            self.first_delta_sent = asyncio.Event()
+            self.release_first_sentence = asyncio.Event()
+            self.first_sentence_sent = asyncio.Event()
+            self.release_second_sentence = asyncio.Event()
+
+        async def stream_chat(
+            self,
+            text: str,
+            *,
+            device_id: str,
+            session_id: str | None,
+            on_delta,
+        ) -> DavieReply:
+            assert text == "Hello Davie"
+            assert device_id == "device-1"
+            await on_delta("First")
+            self.first_delta_sent.set()
+            await self.release_first_sentence.wait()
+            await on_delta(" sentence.")
+            self.first_sentence_sent.set()
+            await self.release_second_sentence.wait()
+            await on_delta(" Second sentence.")
+            return DavieReply(
+                "First sentence. Second sentence.",
+                session_id or "streamed-session",
+            )
+
+    transport = FakeTransport()
+    davie = StreamingDavie()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=FakeMedia(),
+        davie=davie,
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    turn = asyncio.create_task(session._process_turn(_pcm_frame(1800)))
+    await davie.first_delta_sent.wait()
+
+    timing_after_first_delta = session.status()["last_turn_timing"]
+    assert timing_after_first_delta["first_text_ms"] is not None
+    assert timing_after_first_delta["first_audio_ms"] is None
+    assert turn.done() is False
+
+    davie.release_first_sentence.set()
+    await davie.first_sentence_sent.wait()
+
+    for _ in range(20):
+        if transport.binary:
+            break
+        await asyncio.sleep(0.01)
+
+    assert transport.binary
+    assert turn.done() is False
+    timing_while_streaming = session.status()["last_turn_timing"]
+    assert timing_while_streaming["first_text_ms"] is not None
+    assert timing_while_streaming["first_audio_ms"] is not None
+    assert timing_while_streaming["llm_ms"] is None
+
+    davie.release_second_sentence.set()
+    await asyncio.wait_for(turn, timeout=3)
+
+    timing = session.status()["last_turn_timing"]
+    assert timing["outcome"] == "completed"
+    assert timing["first_audio_ms"] < timing["llm_ms"]
+    assert session.last_response == "First sentence. Second sentence."
+    assert session.davie_session_id == "streamed-session"
+    sentence_starts = [
+        item["text"]
+        for item in transport.json
+        if item.get("type") == "tts" and item.get("state") == "sentence_start"
+    ]
+    assert sentence_starts == ["First sentence.", "Second sentence."]
+    await session.close()
+
+
+async def test_cancelled_stream_stops_queued_speech_and_records_cancel() -> None:
+    class BlockingStreamDavie:
+        def __init__(self):
+            self.first_sentence_sent = asyncio.Event()
+
+        async def stream_chat(
+            self,
+            _text: str,
+            *,
+            device_id: str,
+            session_id: str | None,
+            on_delta,
+        ) -> DavieReply:
+            await on_delta("First sentence.")
+            self.first_sentence_sent.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    transport = FakeTransport()
+    davie = BlockingStreamDavie()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=FakeMedia(),
+        davie=davie,
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    turn = asyncio.create_task(session._process_turn(_pcm_frame(1800)))
+    session.response_task = turn
+    await davie.first_sentence_sent.wait()
+    for _ in range(20):
+        if transport.binary:
+            break
+        await asyncio.sleep(0.01)
+    assert transport.binary
+
+    await session.cancel_response(reason="stream_barge_in")
+
+    assert turn.cancelled()
+    assert session.speaking is False
+    assert session.status()["last_turn_timing"]["outcome"] == "cancelled"
+    stop_events = [
+        item
+        for item in transport.json
+        if item.get("type") == "tts" and item.get("state") == "stop"
+    ]
+    assert stop_events[-1]["reason"] == "stream_barge_in"
+    await session.close()
+
+
+async def test_next_sentence_is_synthesized_while_current_audio_plays() -> None:
+    class PrefetchMedia(FakeMedia):
+        def __init__(self):
+            self.calls = 0
+            self.second_synthesis_started = asyncio.Event()
+
+        async def synthesize(self, _text: str) -> bytes:
+            self.calls += 1
+            if self.calls == 2:
+                self.second_synthesis_started.set()
+            return pcm_to_wav(
+                struct.pack("<14400h", *([600] * 14400)),
+                24000,
+            )
+
+    transport = FakeTransport()
+    media = PrefetchMedia()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=media,
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+
+    speaking = asyncio.create_task(
+        session._speak("First sentence. Second sentence.", session.generation_id)
+    )
+    await asyncio.wait_for(media.second_synthesis_started.wait(), timeout=1)
+
+    assert speaking.done() is False
+    assert session.speaking is True
+    await asyncio.wait_for(speaking, timeout=3)
+    assert media.calls == 2
+    assert len(transport.binary) == 20
     await session.close()
 
 
