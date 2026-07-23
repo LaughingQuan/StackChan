@@ -56,6 +56,13 @@ device tokens, and the Hermes API key must never be placed in Git.
 - A voice-first capability router for help, reminders, volume, head movement,
   onboard LED control, and reading commands. Direct device actions do not spend
   a model call and only report success after the matching MCP tool succeeds.
+- An optional bounded TF edge-memory path for short notes, one reader recovery
+  checkpoint, and rolling diagnostics. These actions are deterministic and do
+  not add a model call or block first audio; long-form reader state remains in
+  the gateway.
+- A discoverable no-ASR fallback: say `Davie` first, or tap Davie's face once
+  when the wake phrase is missed. Both start the same official device-local
+  session and require no remote wake endpoint.
 - Persistent read-aloud state with sentence-level checkpoints. Barge-in pauses
   immediately; resume repeats the interrupted sentence instead of skipping it.
 - High-level authenticated APIs for Davie to speak, see, control hardware, and

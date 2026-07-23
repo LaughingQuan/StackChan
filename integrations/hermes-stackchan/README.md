@@ -13,6 +13,12 @@
 The plugin calls the authenticated StackChan gateway. It never embeds a token in source or
 `config.yaml`; configuration only points to a local mode-`0600` token file.
 
+When a user explicitly asks whether the desktop robot is currently online, awake, connected,
+usable, or showing a dark screen, a narrow `pre_llm_call` hook fetches authenticated live-state
+evidence before inference. Unrelated turns do not perform this query. The hook distinguishes
+Gateway reachability from an active physical device session and preserves `pending_human` for
+touch, wake-word, microphone, and speaker acceptance.
+
 ## Install
 
 ```bash

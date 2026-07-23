@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,22 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from stackchan_client import StackChanClient, StackChanConfig, StackChanError, json_result
+
+
+_CURRENT_STATE_ENTITY_RE = re.compile(
+    r"(?:stack[\s-]?chan|desktop\s+robot|desk\s+robot|"
+    r"davie(?:'s|\s+的)?\s*(?:robot|body|机器人|身体)|桌面机器人|机器人\s*davie)",
+    re.IGNORECASE,
+)
+_CURRENT_STATE_REQUEST_RE = re.compile(
+    r"(?:"
+    r"现在|当前|目前|此刻|状态|在线|离线|连接|可用|能用|正常|"
+    r"醒着|唤醒|叫不醒|在听|黑屏|屏幕.{0,4}(?:黑|暗)|物理会话|"
+    r"current|now|status|online|offline|connect(?:ed|ion)?|available|"
+    r"usable|ready|awake|listening|wake|dark\s+screen|physical\s+session"
+    r")",
+    re.IGNORECASE,
+)
 
 
 STATUS_SCHEMA = {
@@ -282,6 +299,44 @@ def _command_status(_raw_args: str = "") -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
+def stackchan_pre_llm_hint(**kwargs: Any) -> dict[str, str] | None:
+    """Inject current physical-state evidence when the user explicitly asks for it."""
+    user_message = str(kwargs.get("user_message") or "").strip()
+    if (
+        not user_message
+        or not _CURRENT_STATE_ENTITY_RE.search(user_message)
+        or not _CURRENT_STATE_REQUEST_RE.search(user_message)
+    ):
+        return None
+
+    try:
+        evidence = StackChanClient(_config()).status(include_capabilities=False)
+    except StackChanError as exc:
+        evidence = exc.as_dict()
+
+    compact_evidence = json.dumps(
+        evidence,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return {
+        "context": (
+            "[StackChan current-state evidence]\n"
+            "A live local StackChan status query for this exact turn has already completed. "
+            "Answer directly from the evidence below; do not ask what StackChan means, do not "
+            "invent Docker/container/monitoring checks, and do not call stackchan_status again. "
+            "Distinguish Gateway reachability from an active physical device session. "
+            "A dark screen may be normal display sleep and is not proof that the robot is offline. "
+            "The screen-tap fallback is loaded in firmware, but its physical acceptance remains "
+            "pending_human until a person confirms the real touch interaction. Never describe "
+            "wake-word, touch, speaker, or microphone behavior as human-verified unless the "
+            "evidence explicitly says so.\n"
+            f"Live evidence JSON: {compact_evidence}"
+        )
+    }
+
+
 def register(ctx: Any) -> None:
     for schema, handler, emoji in (
         (STATUS_SCHEMA, _handle_status, "🤖"),
@@ -301,6 +356,10 @@ def register(ctx: Any) -> None:
             description=schema["description"],
             emoji=emoji,
         )
+    try:
+        ctx.register_hook("pre_llm_call", stackchan_pre_llm_hint)
+    except (AttributeError, TypeError):
+        pass
     try:
         ctx.register_command(
             "stackchan",

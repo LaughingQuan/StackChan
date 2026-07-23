@@ -23,6 +23,12 @@ def test_capability_manifest_is_voice_first_and_names_wake_word() -> None:
                     "Tap Davie's face once to start or end a voice session if the wake phrase "
                     "is missed."
                 ),
+                "implementation_state": "loaded_in_firmware",
+                "physical_acceptance": "pending_human",
+                "claim_policy": (
+                    "Do not call screen-tap human-verified until a person confirms it on the "
+                    "physical device."
+                ),
             },
         },
         "end": {
@@ -31,6 +37,10 @@ def test_capability_manifest_is_voice_first_and_names_wake_word() -> None:
         },
         "idle_timeout_seconds": 120,
         "remote_wake_supported": False,
+        "display_sleep_note": (
+            "A dark display may be normal display sleep and does not by itself prove that the "
+            "device or Wi-Fi is offline."
+        ),
     }
     assert {item["id"] for item in manifest["capabilities"]} >= {
         "vision",
@@ -40,6 +50,10 @@ def test_capability_manifest_is_voice_first_and_names_wake_word() -> None:
         "session_control",
     }
     assert manifest["voice_session"]["wake"]["fallback"]["method"] == "screen_tap"
+    assert (
+        manifest["voice_session"]["wake"]["fallback"]["physical_acceptance"]
+        == "pending_human"
+    )
 
 
 def test_parse_reader_and_device_actions_in_both_languages() -> None:
@@ -57,6 +71,14 @@ def test_parse_reader_and_device_actions_in_both_languages() -> None:
     assert saved.arguments == {"text": "call the bank on Friday"}
     assert parse_device_action("记一下，周五给母行回复").kind == "storage_note_save"
     assert parse_device_action("Davie, read my saved notes").kind == "storage_notes_recent"
+    assert parse_device_action("What can you save on the TF card?").kind == "storage_help"
+    assert (
+        parse_device_action(
+            "Hello Davie, tell me one simple thing you can save on the TF card."
+        ).kind
+        == "storage_help"
+    )
+    assert parse_device_action("TF卡有什么用？").kind == "storage_help"
     assert parse_device_action("查看TF卡状态").kind == "storage_status"
 
 

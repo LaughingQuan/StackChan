@@ -727,6 +727,12 @@ class StackChanClient:
                             "Tap Davie's face once to start or end a voice session if the wake "
                             "phrase is missed."
                         ),
+                        "implementation_state": "loaded_in_firmware",
+                        "physical_acceptance": "pending_human",
+                        "claim_policy": (
+                            "Do not call screen-tap human-verified until a person confirms it on "
+                            "the physical device."
+                        ),
                     },
                 },
                 "end": {
@@ -735,6 +741,10 @@ class StackChanClient:
                 },
                 "idle_timeout_seconds": 120,
                 "remote_wake_supported": False,
+                "display_sleep_note": (
+                    "A dark display may be normal display sleep and does not by itself prove that "
+                    "the device or Wi-Fi is offline."
+                ),
             }
         if include_capabilities:
             capabilities = manifest.get("capabilities")

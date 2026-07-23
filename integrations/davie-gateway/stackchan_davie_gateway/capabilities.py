@@ -110,6 +110,15 @@ _STORAGE_STATUS = re.compile(
     r"^(?:davie[，,\s]*)?(?:检查|查看)?(?:一下)?(?:TF卡|存储卡|边缘存储)(?:的)?(?:状态|情况)",
     re.IGNORECASE,
 )
+_STORAGE_HELP = re.compile(
+    r"(?:what (?:can|do) you (?:save|store)(?: on| in)? (?:the )?(?:tf card|storage card)|"
+    r"tell me .{0,80}(?:save|store).{0,40}(?:tf card|storage card)|"
+    r"what is (?:the )?(?:tf card|storage card) for|"
+    r"can you save (?:books?|audio|files?) (?:on|in) (?:the )?(?:tf card|storage card)|"
+    r"(?:TF卡|存储卡)(?:能|可以)?(?:保存|存)(?:什么|哪些)|"
+    r"(?:TF卡|存储卡)(?:是)?(?:做什么用|有什么用|能做什么))",
+    re.IGNORECASE,
+)
 _REMINDER_EN = re.compile(
     r"\bremind me in\s+(\d{1,5})\s*(seconds?|minutes?|hours?)\s+(?:to\s+)?(.+)",
     re.IGNORECASE,
@@ -153,6 +162,12 @@ def capability_manifest() -> dict[str, Any]:
                         "Tap Davie's face once to start or end a voice session if the wake phrase "
                         "is missed."
                     ),
+                    "implementation_state": "loaded_in_firmware",
+                    "physical_acceptance": "pending_human",
+                    "claim_policy": (
+                        "Do not call screen-tap human-verified until a person confirms it on the "
+                        "physical device."
+                    ),
                 },
             },
             "end": {
@@ -161,6 +176,10 @@ def capability_manifest() -> dict[str, Any]:
             },
             "idle_timeout_seconds": 120,
             "remote_wake_supported": False,
+            "display_sleep_note": (
+                "A dark display may be normal display sleep and does not by itself prove that the "
+                "device or Wi-Fi is offline."
+            ),
         },
         "screen_menu": "official_launcher",
         "capabilities": list(CAPABILITIES),
@@ -214,6 +233,8 @@ def parse_device_action(text: str) -> DeviceAction | None:
         return DeviceAction("session_sleep", chinese=chinese)
     if _NOTE_LIST.search(normalized):
         return DeviceAction("storage_notes_recent", {"limit": 3}, chinese=chinese)
+    if _STORAGE_HELP.search(normalized):
+        return DeviceAction("storage_help", chinese=chinese)
     if _STORAGE_STATUS.search(normalized):
         return DeviceAction("storage_status", chinese=chinese)
 

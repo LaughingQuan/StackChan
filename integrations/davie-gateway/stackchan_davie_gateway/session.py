@@ -1119,6 +1119,20 @@ class StackChanSession:
                 turn_started_monotonic=turn_started_monotonic,
             )
             return True
+        if action.kind == "storage_help":
+            reply = (
+                "TF 卡保存短笔记、阅读断点和少量诊断记录。它不会保存整本书、密码或连续录音。"
+                if action.chinese
+                else "The TF card stores short notes, your reading checkpoint, and a small diagnostic log. "
+                "It does not store whole books, passwords, or continuous audio."
+            )
+            await self._speak(
+                reply,
+                generation,
+                timing=timing,
+                turn_started_monotonic=turn_started_monotonic,
+            )
+            return True
         if action.kind == "storage_status":
             payload = await self._call_storage_json("self.storage.get_status", {})
             if payload.get("mounted") is True and payload.get("writable") is True:

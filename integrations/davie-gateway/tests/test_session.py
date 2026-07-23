@@ -1057,6 +1057,11 @@ async def test_tf_note_actions_are_local_and_do_not_call_davie() -> None:
     )
     assert "call the bank on Friday" in session.last_response
     assert await session._handle_device_action(
+        DeviceAction("storage_help", chinese=False),
+        session.generation_id,
+    )
+    assert "does not store whole books" in session.last_response
+    assert await session._handle_device_action(
         DeviceAction("storage_status", chinese=False),
         session.generation_id,
     )

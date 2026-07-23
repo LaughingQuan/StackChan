@@ -66,6 +66,12 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                                     "Tap Davie's face once to start or end a voice session if the "
                                     "wake phrase is missed."
                                 ),
+                                "implementation_state": "loaded_in_firmware",
+                                "physical_acceptance": "pending_human",
+                                "claim_policy": (
+                                    "Do not call screen-tap human-verified until a person confirms "
+                                    "it on the physical device."
+                                ),
                             },
                         },
                         "end": {
@@ -77,6 +83,10 @@ class _GatewayHandler(BaseHTTPRequestHandler):
                         },
                         "idle_timeout_seconds": 120,
                         "remote_wake_supported": False,
+                        "display_sleep_note": (
+                            "A dark display may be normal display sleep and does not by itself "
+                            "prove that the device or Wi-Fi is offline."
+                        ),
                     },
                     "capabilities": [{"id": "vision", "label": "Look and explain"}],
                 }
@@ -319,6 +329,10 @@ def test_status_reports_gateway_device_and_capability_without_identity(gateway):
     assert result["human_operations"]["wake"]["phrase"] == "Davie"
     assert result["human_operations"]["wake"]["method"] == "device_local_voice"
     assert result["human_operations"]["wake"]["fallback"]["method"] == "screen_tap"
+    assert (
+        result["human_operations"]["wake"]["fallback"]["physical_acceptance"]
+        == "pending_human"
+    )
     assert result["human_operations"]["end"]["voice_phrases"] == [
         "Goodbye Davie",
         "Go to sleep",
@@ -636,12 +650,65 @@ def test_storage_rejects_unbounded_or_destructive_actions(gateway, kwargs):
     assert _GatewayHandler.requests == before
 
 
+def test_live_state_hook_prefetches_truthful_device_evidence(gateway, monkeypatch):
+    monkeypatch.setattr(
+        plugin_module,
+        "_config",
+        lambda: plugin_module.StackChanConfig.load(gateway),
+    )
+
+    hint = plugin_module.stackchan_pre_llm_hint(
+        user_message="请检查 Stack-chan 当前物理会话状态，屏幕黑是不是离线？"
+    )
+
+    assert hint is not None
+    assert '"physical_status":"active_session"' in hint["context"]
+    assert "dark screen may be normal display sleep" in hint["context"]
+    assert "pending_human" in hint["context"]
+    assert "stackchan-main" not in hint["context"]
+    assert _GatewayHandler.token not in hint["context"]
+
+
+def test_live_state_hook_reports_no_session_without_claiming_offline(gateway, monkeypatch):
+    _GatewayHandler.devices = []
+    monkeypatch.setattr(
+        plugin_module,
+        "_config",
+        lambda: plugin_module.StackChanConfig.load(gateway),
+    )
+
+    hint = plugin_module.stackchan_pre_llm_hint(
+        user_message="Can I use the desktop robot right now?"
+    )
+
+    assert hint is not None
+    assert '"gateway_reachable":true' in hint["context"]
+    assert '"physical_status":"no_active_session"' in hint["context"]
+    assert "do not call stackchan_status again" in hint["context"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Explain the Stack-chan architecture.",
+        "Please summarize this document.",
+        "Davie, how are you today?",
+        "桌面机器人以后可以增加什么能力？",
+    ],
+)
+def test_live_state_hook_does_not_slow_unrelated_turns(message):
+    assert plugin_module.stackchan_pre_llm_hint(user_message=message) is None
+
+
 def test_plugin_registers_status_speech_and_vision_tools():
     calls = []
 
     class Context:
         def register_tool(self, **kwargs):
             calls.append(("tool", kwargs))
+
+        def register_hook(self, *args):
+            calls.append(("hook", args))
 
         def register_command(self, *args, **kwargs):
             calls.append(("command", (args, kwargs)))
@@ -667,3 +734,5 @@ def test_plugin_registers_status_speech_and_vision_tools():
     assert tools["stackchan_control"]["handler"] is plugin_module._handle_control
     assert tools["stackchan_reminder"]["handler"] is plugin_module._handle_reminder
     assert tools["stackchan_storage"]["handler"] is plugin_module._handle_storage
+    hooks = [item[1] for item in calls if item[0] == "hook"]
+    assert hooks == [("pre_llm_call", plugin_module.stackchan_pre_llm_hint)]
