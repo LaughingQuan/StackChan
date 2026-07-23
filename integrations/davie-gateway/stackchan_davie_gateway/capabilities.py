@@ -36,6 +36,11 @@ CAPABILITIES: tuple[dict[str, str], ...] = (
         "label": "Davie output endpoint",
         "description": "Let Davie speak or use the camera through authenticated gateway APIs.",
     },
+    {
+        "id": "session_control",
+        "label": "Sleep and wake",
+        "description": "End the current voice session explicitly, then wake Davie again when needed.",
+    },
 )
 
 
@@ -67,6 +72,12 @@ _READER_STOP = re.compile(
 _READER_STATUS = re.compile(
     r"(?:reading status|where (?:are we|did we stop)(?: in the book)?|"
     r"读到哪里了|阅读进度|朗读进度)",
+    re.IGNORECASE,
+)
+_SESSION_SLEEP = re.compile(
+    r"(?:goodbye(?:\s+davie)?|bye(?:\s+davie)?|davie[, ]+(?:go to sleep|sleep|stop listening)|"
+    r"(?:go to sleep|stop listening|close (?:the )?voice session)|"
+    r"(?:davie[，, ]*)?(?:再见|休息吧|去休息|停止监听|关闭语音|结束对话))",
     re.IGNORECASE,
 )
 _REMINDER_EN = re.compile(
@@ -104,6 +115,7 @@ def capability_manifest() -> dict[str, Any]:
             "Davie, what do you see?",
             "Davie, continue reading.",
             "Davie, pause reading.",
+            "Davie, go to sleep.",
             "Davie, remind me in ten minutes to take a break.",
             "Davie, set the volume to 45.",
         ],
@@ -138,6 +150,8 @@ def parse_device_action(text: str) -> DeviceAction | None:
         return DeviceAction("reader_stop", chinese=chinese)
     if _READER_STATUS.search(normalized):
         return DeviceAction("reader_status", chinese=chinese)
+    if _SESSION_SLEEP.search(normalized):
+        return DeviceAction("session_sleep", chinese=chinese)
 
     match = _REMINDER_EN.search(normalized)
     if match:

@@ -16,6 +16,7 @@ class FakeTransport:
         self.json: list[dict] = []
         self.binary: list[bytes] = []
         self.closed = False
+        self.close_reason: str | None = None
 
     async def send_json(self, payload: dict) -> None:
         self.json.append(payload)
@@ -26,6 +27,7 @@ class FakeTransport:
     async def close(self, code: int = 1000, reason: str | None = None) -> None:
         assert code == 1000
         self.closed = True
+        self.close_reason = reason
 
 
 class FakeCodec:
@@ -66,6 +68,11 @@ class NoDavie:
 class EmptyMedia(FakeMedia):
     async def transcribe(self, _wav: bytes, *, hotwords: list[str]) -> str:
         return ""
+
+
+class SleepMedia(FakeMedia):
+    async def transcribe(self, _wav: bytes, *, hotwords: list[str]) -> str:
+        return "Goodbye Davie"
 
 
 def _pcm_frame(amplitude: int) -> bytes:
@@ -136,6 +143,64 @@ async def test_realtime_empty_transcript_keeps_listening_without_failure_alert()
     assert session.last_error == "asr_empty_transcript"
     assert not any(item.get("type") == "alert" for item in transport.json)
     await session.close()
+
+
+async def test_voice_sleep_command_closes_session_without_model_call() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=SleepMedia(),
+        davie=NoDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+
+    await session._process_turn(_pcm_frame(1800))
+
+    assert session.closed is True
+    assert session.state == "closed"
+    assert session.close_reason == "voice_sleep"
+    assert transport.closed is True
+    assert transport.close_reason == "voice_sleep"
+    assert session.last_response.startswith("Goodbye")
+
+
+async def test_inactivity_watchdog_returns_device_to_sleep() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(
+            session_idle_timeout_seconds=0.08,
+            session_watchdog_interval_seconds=0.01,
+        ),
+        media=FakeMedia(),
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+
+    await asyncio.sleep(0.16)
+
+    status = session.status()
+    assert status["closed"] is True
+    assert status["session_state"] == "closed"
+    assert status["idle_timeout_count"] == 1
+    assert status["close_reason"] == "inactivity_timeout"
+    assert transport.closed is True
+    assert any(item.get("status") == "Sleeping" for item in transport.json)
 
 
 async def test_official_mcp_is_initialized_by_gateway_and_tools_are_discovered() -> None:

@@ -101,6 +101,10 @@ def test_admin_routes_require_the_separate_admin_token() -> None:
         )
         assert response.status_code == 200
         assert response.json() == {"devices": []}
+        assert client.post(
+            "/v1/devices/offline/sleep",
+            headers={"Authorization": "Bearer admin-secret"},
+        ).status_code == 404
 
 
 def test_runtime_validation_fails_closed_without_credentials() -> None:

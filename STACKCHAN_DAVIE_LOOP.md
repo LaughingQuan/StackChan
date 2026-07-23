@@ -37,6 +37,12 @@ handoff:
 
 ## Claims
 
+### 【进行中】Codex 2026-07-23 22:38 Asia/Singapore — StackChan Readiness P0 control plane (TTL 6h)
+- 正在改: `integrations/davie-gateway/**`, 必要时 `firmware/**`, `docs/**`, `STACKCHAN_DAVIE_LOOP.md`
+- 目标: 补齐会话生命周期、超时休眠/显式关闭、no-speech/低质量输入门禁、避免误打断与取消风暴，并形成可观察验收证据。
+- 验证: 每个原子阶段新增/更新测试后执行 Gateway 全量回归；固件若改动则追加 host test、完整 ESP-IDF build、分区兼容和 secret scan；部署后做 Rock5B live smoke 与 StackChan 非人工证据检查。
+- 边界: ¥0；不调用付费/云端模型；不改 Davie executor/proactivity 核心；不把合成声音或网络可达冒充真人唤醒/听声通过；真人测试缺失时保持明确 pending-human。
+
 ### 【进行中】Codex 2026-07-23 04:16 Asia/Singapore — Davie callable StackChan integration   (TTL 30m)
 - 正在改: integrations/hermes-stackchan/**, integrations/davie-gateway/**（仅在合同缺口需要时）, docs/**, STACKCHAN_DAVIE_LOOP.md, /Users/jm2m/.hermes/plugins/jm-stackchan/**（独立安装副本）
 - 目标: 让 Davie 通过解耦工具调用 StackChan 的状态、说话、视觉、伴读和设备控制，并逐项验证；不直接修改脏 Hermes 核心。
@@ -57,6 +63,13 @@ handoff:
 - Architecture decision recorded: official 1.4.3 source fork plus a decoupled local protocol adapter.
 - Factory 1.4.4 full-flash recovery image exists on NAS and has a recorded SHA-256 digest.
 - Official host test suite passed before integration changes.
+
+### 【完成】Codex 2026-07-23 22:51 Asia/Singapore — session lifecycle and sleep control
+- 发现: 设备进入语音会话后没有 inactivity watchdog、本地结束口令或管理端关闭合同；自定义唤醒词在 Listening 期间关闭，导致长驻会话会直接破坏下一次可靠唤醒。
+- 修复: 新增 `connecting/ready/listening/transcribing/thinking/speaking/sleeping/closed` 状态证据、120 秒可配置无活动休眠、本地 `Goodbye Davie/go to sleep/休息吧`、受认证管理端 sleep API、close reason 与活动时间诊断。
+- 验证: Gateway `uv run pytest -q` 42 passed；锁定 venv compileall、`git diff --check` 通过。测试覆盖语音休眠不调用模型、watchdog 自动断开、权限及离线错误合同。
+- 花费: ¥0；未调用任何模型/API。
+- 边界: 未把单元测试表述为真人唤醒通过；生产部署留到后续 P0 软件门禁整体通过后统一进行。
 
 
 ### 【完成】Codex 2026-07-23 03:05 Asia/Singapore — official StackChan 1.4.3 Davie local runtime

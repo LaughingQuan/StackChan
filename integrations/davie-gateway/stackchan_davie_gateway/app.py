@@ -226,6 +226,23 @@ def create_app(
         await session.say(body.text)
         return {"status": "accepted", "device_id": device_id}
 
+    @app.post("/v1/devices/{device_id}/sleep")
+    async def sleep_device(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        session = sessions.get(device_id)
+        if not session:
+            raise HTTPException(status_code=404, detail="device is not connected")
+        await session.sleep(reason="admin_sleep")
+        return {
+            "status": "ok",
+            "device_id": device_id,
+            "session_state": session.state,
+            "close_reason": session.close_reason,
+        }
+
     @app.post("/v1/devices/{device_id}/vision")
     async def device_vision(
         device_id: str,

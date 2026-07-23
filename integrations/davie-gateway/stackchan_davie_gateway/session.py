@@ -102,6 +102,15 @@ class StackChanSession:
         self._mcp_pending: dict[int, str] = {}
         self._mcp_waiters: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self.connected_at = time.time()
+        self.state = "connecting"
+        self.state_changed_at = self.connected_at
+        self.last_activity_at = self.connected_at
+        self.last_activity_reason = "connected"
+        self.close_reason = ""
+        self.idle_timeout_count = 0
+        self.state_transition_count = 0
+        self._last_activity_monotonic = time.monotonic()
+        self._inactivity_task: asyncio.Task | None = None
 
     def _new_endpoint(self) -> PcmEndpointDetector:
         return PcmEndpointDetector(
@@ -145,6 +154,9 @@ class StackChanSession:
                 frame_duration_ms=self.settings.frame_duration_ms,
             )
         )
+        self._mark_activity("hello")
+        self._set_state("ready")
+        self._start_inactivity_watchdog()
         if self.hello.supports_mcp:
             await self._send_mcp_request(
                 "initialize",
@@ -167,11 +179,15 @@ class StackChanSession:
             self.listen_mode = str(payload.get("mode") or self.listen_mode)
             self.listening = True
             self.endpoint.reset()
+            self._mark_activity("listen_started")
+            self._set_state("listening")
         elif state == "stop":
             self.listening = False
             captured = self.endpoint.flush()
             if captured:
                 await self._schedule_turn(captured)
+            elif not self.closed:
+                self._set_state("ready")
 
     async def _handle_mcp(self, payload: dict[str, Any]) -> None:
         message = payload.get("payload")
@@ -277,6 +293,9 @@ class StackChanSession:
         pcm = self.codec.decode(packet)
         self.audio_frames_received += 1
         result = self.endpoint.feed(pcm)
+        if result.speech_started:
+            self._mark_activity("speech_started")
+            self._set_state("listening")
         if result.speech_started and self._response_in_flight():
             if self.reader.state == "playing":
                 self.reader.pause()
@@ -315,6 +334,7 @@ class StackChanSession:
         self.turn_count += 1
         self.generation_id += 1
         generation = self.generation_id
+        self._set_state("transcribing")
         try:
             transcript = await self.media.transcribe(
                 pcm_to_wav(pcm, self.hello.sample_rate if self.hello else self.settings.input_sample_rate),
@@ -340,12 +360,14 @@ class StackChanSession:
                     )
                 return
             self.last_transcript = transcript
+            self._mark_activity("accepted_transcript")
             await self.transport.send_json(
                 {"session_id": self.session_id, "type": "stt", "text": transcript}
             )
             action = parse_device_action(transcript)
             if action and await self._handle_device_action(action, generation):
                 return
+            self._set_state("thinking")
             visual_reply = await self._visual_reply(transcript)
             if visual_reply:
                 reply = visual_reply
@@ -381,6 +403,9 @@ class StackChanSession:
                         "emotion": "sad",
                     }
                 )
+        finally:
+            if generation == self.generation_id and not self.closed and not self.speaking:
+                self._set_state("listening" if self.listening else "ready")
 
     async def _visual_reply(self, transcript: str):
         if "self.camera.take_photo" not in self.mcp_tools or not VISUAL_REQUEST_PATTERN.search(transcript):
@@ -395,6 +420,11 @@ class StackChanSession:
             return None
 
     async def _handle_device_action(self, action: DeviceAction, generation: int) -> bool:
+        if action.kind == "session_sleep":
+            text = "晚安，需要我时再叫 Davie。" if action.chinese else "Goodbye. Say Davie when you need me again."
+            await self._speak(text, generation)
+            await self.sleep(reason="voice_sleep", announce=False)
+            return True
         if action.kind == "help":
             await self._speak(capability_reply(chinese=action.chinese), generation)
             return True
@@ -543,6 +573,7 @@ class StackChanSession:
             return
         self.last_response = text
         self.speaking = True
+        self._set_state("speaking")
         await self.transport.send_json({"session_id": self.session_id, "type": "llm", "emotion": "happy"})
         await self.transport.send_json({"session_id": self.session_id, "type": "tts", "state": "start"})
         try:
@@ -579,6 +610,8 @@ class StackChanSession:
                 await self.transport.send_json(
                     {"session_id": self.session_id, "type": "tts", "state": "stop"}
                 )
+                if not self.closed:
+                    self._set_state("listening" if self.listening else "ready")
 
     async def say(self, text: str) -> None:
         async with self.response_lock:
@@ -699,11 +732,69 @@ class StackChanSession:
                     }
                 )
 
-    async def close(self, *, close_transport: bool = False) -> None:
+    def _set_state(self, state: str) -> None:
+        if self.state == state:
+            return
+        self.state = state
+        self.state_changed_at = time.time()
+        self.state_transition_count += 1
+
+    def _mark_activity(self, reason: str) -> None:
+        self.last_activity_at = time.time()
+        self._last_activity_monotonic = time.monotonic()
+        self.last_activity_reason = reason
+
+    def _start_inactivity_watchdog(self) -> None:
+        if self.settings.session_idle_timeout_seconds <= 0 or self._inactivity_task:
+            return
+        self._inactivity_task = asyncio.create_task(self._inactivity_watchdog())
+
+    async def _inactivity_watchdog(self) -> None:
+        interval = max(
+            0.05,
+            min(
+                self.settings.session_watchdog_interval_seconds,
+                self.settings.session_idle_timeout_seconds / 4,
+            ),
+        )
+        try:
+            while not self.closed:
+                await asyncio.sleep(interval)
+                if self.speaking or self._response_in_flight() or self.reader.state == "playing":
+                    continue
+                idle_seconds = time.monotonic() - self._last_activity_monotonic
+                if idle_seconds < self.settings.session_idle_timeout_seconds:
+                    continue
+                self.idle_timeout_count += 1
+                await self.sleep(reason="inactivity_timeout")
+                return
+        except asyncio.CancelledError:
+            raise
+
+    async def sleep(self, *, reason: str, announce: bool = True) -> None:
+        if self.closed:
+            return
+        self._set_state("sleeping")
+        if announce:
+            await self.transport.send_json(
+                {
+                    "session_id": self.session_id,
+                    "type": "alert",
+                    "status": "Sleeping",
+                    "message": "Say Davie when you need me again.",
+                    "emotion": "neutral",
+                }
+            )
+        await self.close(close_transport=True, reason=reason)
+
+    async def close(self, *, close_transport: bool = False, reason: str = "connection_closed") -> None:
+        inactivity_task: asyncio.Task | None = None
         async with self.response_lock:
             if self.closed:
                 return
             self.closed = True
+            self.close_reason = reason
+            self._set_state("closed")
             if self.reader.state == "playing":
                 self.reader.pause()
             self.generation_id += 1
@@ -717,8 +808,17 @@ class StackChanSession:
                     waiter.cancel()
             self._mcp_waiters.clear()
             self._mcp_pending.clear()
+            inactivity_task = self._inactivity_task
+            self._inactivity_task = None
+            if inactivity_task and inactivity_task is not asyncio.current_task():
+                inactivity_task.cancel()
+        if inactivity_task and inactivity_task is not asyncio.current_task():
+            try:
+                await inactivity_task
+            except asyncio.CancelledError:
+                pass
         if close_transport:
-            await self.transport.close(code=1000, reason="replaced by a newer device connection")
+            await self.transport.close(code=1000, reason=reason)
 
     def status(self) -> dict[str, Any]:
         return {
@@ -726,6 +826,18 @@ class StackChanSession:
             "client_id": self.client_id,
             "session_id": self.session_id,
             "connected_at": self.connected_at,
+            "session_state": self.state,
+            "state_changed_at": self.state_changed_at,
+            "state_transition_count": self.state_transition_count,
+            "last_activity_at": self.last_activity_at,
+            "last_activity_reason": self.last_activity_reason,
+            "inactivity_deadline_at": (
+                self.last_activity_at + self.settings.session_idle_timeout_seconds
+                if self.settings.session_idle_timeout_seconds > 0
+                else None
+            ),
+            "idle_timeout_count": self.idle_timeout_count,
+            "close_reason": self.close_reason,
             "handshake_complete": self.hello is not None,
             "listening": self.listening,
             "speaking": self.speaking,

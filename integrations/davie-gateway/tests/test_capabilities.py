@@ -8,7 +8,12 @@ def test_capability_manifest_is_voice_first_and_names_wake_word() -> None:
     assert manifest["assistant"] == "Davie"
     assert manifest["wake_word"] == "Davie"
     assert manifest["interaction"] == "voice_first"
-    assert {item["id"] for item in manifest["capabilities"]} >= {"vision", "reader", "reminder"}
+    assert {item["id"] for item in manifest["capabilities"]} >= {
+        "vision",
+        "reader",
+        "reminder",
+        "session_control",
+    }
 
 
 def test_parse_reader_and_device_actions_in_both_languages() -> None:
@@ -18,6 +23,8 @@ def test_parse_reader_and_device_actions_in_both_languages() -> None:
     assert parse_device_action("set the volume to 45").arguments == {"volume": 45}
     assert parse_device_action("把头转向左边").arguments == {"direction": "left"}
     assert parse_device_action("set the LED to blue").arguments == {"color": "blue"}
+    assert parse_device_action("Davie, go to sleep.").kind == "session_sleep"
+    assert parse_device_action("休息吧").kind == "session_sleep"
 
 
 def test_parse_reminder_converts_units_and_rejects_out_of_range() -> None:

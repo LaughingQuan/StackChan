@@ -34,6 +34,8 @@ class Settings:
     endpoint_min_speech_ms: int = 240
     endpoint_max_turn_ms: int = 20000
     endpoint_min_rms: int = 420
+    session_idle_timeout_seconds: float = 120.0
+    session_watchdog_interval_seconds: float = 1.0
     max_spoken_sentences: int = 3
     max_spoken_chars: int = 520
     max_camera_image_bytes: int = 2_000_000
@@ -99,6 +101,12 @@ class Settings:
             endpoint_min_speech_ms=int(os.environ.get("STACKCHAN_ENDPOINT_MIN_SPEECH_MS", "240")),
             endpoint_max_turn_ms=int(os.environ.get("STACKCHAN_ENDPOINT_MAX_TURN_MS", "20000")),
             endpoint_min_rms=int(os.environ.get("STACKCHAN_ENDPOINT_MIN_RMS", "420")),
+            session_idle_timeout_seconds=float(
+                os.environ.get("STACKCHAN_SESSION_IDLE_TIMEOUT_SECONDS", "120")
+            ),
+            session_watchdog_interval_seconds=float(
+                os.environ.get("STACKCHAN_SESSION_WATCHDOG_INTERVAL_SECONDS", "1")
+            ),
             camera_snapshot_dir=os.environ.get(
                 "STACKCHAN_CAMERA_SNAPSHOT_DIR", "/var/lib/stackchan-davie/camera"
             ),
