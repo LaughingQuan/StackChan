@@ -92,6 +92,13 @@ handoff:
 - 花费: ¥0；完整语音 smoke 只调用本地 NVIDIA 与本地 Davie。
 - 边界: 没有把协议 smoke 当成真人唤醒/人耳播放证据；Hermes 长驻 Gateway 将在最终全量门禁后统一重启加载插件。
 
+### 【完成】Codex 2026-07-24 00:02 Asia/Singapore — direct Davie firmware candidate
+- 发现: 已部署固件仍要求完整的 `Hello Davie`，不符合用户要求的单词唤醒；重启后系统 PATH 丢失 CMake/Ninja，但 ESP-IDF Python 环境已有可用工具，重复下载没有必要。
+- 修复: Davie 固件 overlay 改为唯一唤醒命令 `DAVIE`，保留显示名与阈值；构建明确复用 ESP-IDF 5.5.4 隔离环境，不依赖全局 PATH。
+- 验证: firmware host test 1/1 passed；ESP-IDF 5.5.4 全量 reconfigure/build passed；生成配置确认为 `CONFIG_CUSTOM_WAKE_WORD="DAVIE"`；应用镜像 4,407,248 bytes，分区保留 15%；分区表与已验证物理布局一致；NAS 三套 factory/pre-Davie 恢复清单 SHA-256 全部通过。
+- 花费: ¥0。
+- 边界: 构建通过只表示固件候选可刷写；真人直呼识别率、噪声环境和误唤醒率仍需设备旁人工验收。
+
 
 ### 【完成】Codex 2026-07-23 03:05 Asia/Singapore — official StackChan 1.4.3 Davie local runtime
 - 发现: stock firmware already provided the required camera, duplex audio, motion, OTA, MCP, provisioning, and AI Agent lifecycle; the narrowest maintainable design was an upstream-first build flag plus a decoupled Xiaozhi/Davie gateway. A live vision-follow-up bug was also found: camera requests used a stable memory key instead of the active spoken session.
