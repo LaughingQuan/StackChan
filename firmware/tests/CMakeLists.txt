@@ -45,3 +45,18 @@ add_test(
     NAME davie_post_wake_audio_bridge_test
     COMMAND $<TARGET_FILE:davie_post_wake_audio_bridge_test>
 )
+
+add_executable(davie_wake_inference_gate_test
+    davie_wake_inference_gate_test.cpp
+)
+
+target_include_directories(davie_wake_inference_gate_test PRIVATE
+    ../main
+)
+
+target_compile_features(davie_wake_inference_gate_test PRIVATE cxx_std_17)
+
+add_test(
+    NAME davie_wake_inference_gate_test
+    COMMAND $<TARGET_FILE:davie_wake_inference_gate_test>
+)

@@ -390,3 +390,10 @@ handoff:
 - 目标: prove the committed P1 firmware boots reliably, reports truthful AFE/pre-roll attestation, retains Wi-Fi/TF/Gateway functionality, and improves bounded synthetic wake/first-word behavior without panic, WDT, or stale replay.
 - 验证: committed-revision clean build; verified NAS backup; app-only flash/readback; serial boot and heap audit; MCP attestation; repeated synthetic wake and first-word canaries; Gateway/firmware regression.
 - 边界: ¥0; no cloud/model calls; no Davie Gateway/executor/proactivity changes; no NVS/TF/assets write; no automated evidence represented as human acoustic acceptance.
+
+### 【修复中】Codex 2026-07-24 18:21 Asia/Singapore — P1 AFE runtime scheduling repair (TTL 8h)
+- 真机失败证据: 首次 app-only 刷写后，串口持续出现 `AFE: Ringbuffer of AFE(FEED) is full`，并由 task watchdog 捕获 CPU1 的 `custom_wake_afe` 正在 MultiNet 推理；该镜像没有被判定为 P1 通过。
+- 根因: AFE 内部生产任务优先级 1，连续 MultiNet 消费任务优先级 3；积压后高优先级识别循环会反向饿死 AFE 与 IDLE1。与此同时 MultiNet 在静音时仍逐帧推理，不符合官方 WakeNet 后启动 MultiNet 的资源模型。
+- 修复方向: 保留 `SR_HIGH_PERF` AEC；AFE 任务升至优先级 3，MultiNet 固定 CPU1/优先级 2；新增 VAD-gated bounded inference、VAD cache 首音节补偿、3.2 秒单段上限、超时后等静音恢复，以及每帧真实调度让步。当前 MR/SR pipeline 的实际 NS 为关闭，attestation 已改为如实报告，避免把 Kconfig 可用误报成运行中。
+- 自动验证: 新增 wake inference gate 主机测试，当前固件 host tests `4/4 passed`；未提交修复的 ESP-IDF 增量构建成功，app `0x447000`、13% free；官方 v2.2.4 补丁可在全新 clone 上通过 `git apply --check` 并重建相同 vendor tree。
+- 下一门禁: 提交修复后从该提交做 fullclean 单进程构建，仅刷 app partition，再以串口证明无 ring-full/WDT/panic/reboot，随后才进行合成 canary 和真人近场验收。

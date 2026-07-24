@@ -6,6 +6,7 @@
 #include "davie_device_attestation.h"
 
 #include "audio/davie_post_wake_audio_bridge.h"
+#include "audio/davie_wake_inference_gate.h"
 #include "config.h"
 #include "hal_bridge.h"
 
@@ -176,19 +177,21 @@ std::string board_get_davie_device_attestation_json()
     cJSON_AddStringToObject(wake, "engine", "multinet_afe_sr");
     cJSON_AddStringToObject(wake, "input_signal", "afe_processed_mono");
     cJSON_AddStringToObject(wake, "afe_type", "speech_recognition");
+    cJSON_AddStringToObject(wake, "inference_policy", "vad_gated_bounded");
+    cJSON_AddNumberToObject(
+        wake,
+        "max_speech_window_ms",
+        davie::audio::kWakeInferenceMaxSpeechFrames * 32);
 #ifdef CONFIG_USE_DEVICE_AEC
     add_bool(wake, "aec_configured", true);
 #else
     add_bool(wake, "aec_configured", false);
 #endif
-#ifdef CONFIG_SR_NSN_WEBRTC
-    cJSON_AddStringToObject(wake, "noise_suppression_configured", "webrtc");
-#else
+    add_bool(wake, "noise_suppression_active", false);
     cJSON_AddStringToObject(
         wake,
-        "noise_suppression_configured",
-        "esp_sr_default");
-#endif
+        "noise_suppression_reason",
+        "mr_sr_profile_uses_aec_and_vad");
     cJSON_AddStringToObject(wake, "phrase", CONFIG_CUSTOM_WAKE_WORD);
     cJSON_AddStringToObject(wake, "display", CONFIG_CUSTOM_WAKE_WORD_DISPLAY);
     cJSON_AddNumberToObject(wake, "threshold_percent", CONFIG_CUSTOM_WAKE_WORD_THRESHOLD);
