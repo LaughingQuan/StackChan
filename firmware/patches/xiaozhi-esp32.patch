@@ -39,7 +39,7 @@ index d69d43d..3b6f07e 100644
 +    // };
 +    // static const std::array<digit_sound, 10> digit_sounds{{
 +    //     digit_sound{'0', Lang::Sounds::OGG_0},
-+    //     digit_sound{'1', Lang::Sounds::OGG_1}, 
++    //     digit_sound{'1', Lang::Sounds::OGG_1},
 +    //     digit_sound{'2', Lang::Sounds::OGG_2},
 +    //     digit_sound{'3', Lang::Sounds::OGG_3},
 +    //     digit_sound{'4', Lang::Sounds::OGG_4},
@@ -271,3 +271,15 @@ index 7bc917b..874b137 100644
  };
  
  #endif // I2C_DEVICE_H
+diff --git a/main/application.cc b/main/application.cc
+--- a/main/application.cc
++++ b/main/application.cc
+@@ -435,6 +435,4 @@ void Application::CheckNewVersion() {
+         if (ota_->HasNewVersion()) {
+-            if (UpgradeFirmware(ota_->GetFirmwareUrl(), ota_->GetFirmwareVersion())) {
+-                return; // This line will never be reached after reboot
+-            }
+-            // If upgrade failed, continue to normal operation
++            ESP_LOGW(TAG, "Pinned 1.4.3 comparison build: skipping automatic OTA to %s",
++                     ota_->GetFirmwareVersion().c_str());
+         }
