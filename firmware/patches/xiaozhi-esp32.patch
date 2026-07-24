@@ -1,5 +1,5 @@
 diff --git a/main/application.cc b/main/application.cc
-index d69d43d..fce3698 100644
+index d69d43d..427752f 100644
 --- a/main/application.cc
 +++ b/main/application.cc
 @@ -610,33 +610,36 @@ void Application::InitializeProtocol() {
@@ -39,7 +39,7 @@ index d69d43d..fce3698 100644
 +    // };
 +    // static const std::array<digit_sound, 10> digit_sounds{{
 +    //     digit_sound{'0', Lang::Sounds::OGG_0},
-+    //     digit_sound{'1', Lang::Sounds::OGG_1}, 
++    //     digit_sound{'1', Lang::Sounds::OGG_1},
 +    //     digit_sound{'2', Lang::Sounds::OGG_2},
 +    //     digit_sound{'3', Lang::Sounds::OGG_3},
 +    //     digit_sound{'4', Lang::Sounds::OGG_4},
@@ -447,19 +447,21 @@ index 99db546..7db3016 100644
 \ No newline at end of file
 +#endif
 diff --git a/main/audio/wake_words/custom_wake_word.cc b/main/audio/wake_words/custom_wake_word.cc
-index 982bbe9..fc02af7 100644
+index 982bbe9..04e5f34 100644
 --- a/main/audio/wake_words/custom_wake_word.cc
 +++ b/main/audio/wake_words/custom_wake_word.cc
-@@ -4,18 +4,35 @@
+@@ -4,22 +4,53 @@
  #include "assets.h"
  
  #include <esp_log.h>
++#include <esp_heap_caps.h>
 +#include <esp_timer.h>
  #include <esp_mn_iface.h>
  #include <esp_mn_models.h>
  #include <esp_mn_speech_commands.h>
  #include <cJSON.h>
 +#include <algorithm>
++#include <cstring>
 +#include <sstream>
 +
 +extern "C" {
@@ -486,7 +488,23 @@ index 982bbe9..fc02af7 100644
      if (multinet_model_data_ != nullptr && multinet_ != nullptr) {
          multinet_->destroy(multinet_model_data_);
          multinet_model_data_ = nullptr;
-@@ -32,6 +49,9 @@ CustomWakeWord::~CustomWakeWord() {
+     }
++    if (inference_ring_ != nullptr) {
++        heap_caps_free(inference_ring_);
++        inference_ring_ = nullptr;
++    }
++    if (multinet_inference_task_stack_ != nullptr) {
++        heap_caps_free(multinet_inference_task_stack_);
++        multinet_inference_task_stack_ = nullptr;
++    }
++    if (multinet_inference_task_buffer_ != nullptr) {
++        heap_caps_free(multinet_inference_task_buffer_);
++        multinet_inference_task_buffer_ = nullptr;
++    }
+ 
+     if (wake_word_encode_task_stack_ != nullptr) {
+         heap_caps_free(wake_word_encode_task_stack_);
+@@ -32,6 +63,9 @@ CustomWakeWord::~CustomWakeWord() {
      if (models_ != nullptr) {
          esp_srmodel_deinit(models_);
      }
@@ -496,7 +514,7 @@ index 982bbe9..fc02af7 100644
  }
  
  void CustomWakeWord::ParseWakenetModelConfig() {
-@@ -62,6 +82,13 @@ void CustomWakeWord::ParseWakenetModelConfig() {
+@@ -62,6 +96,13 @@ void CustomWakeWord::ParseWakenetModelConfig() {
          }
          if (cJSON_IsNumber(threshold)) {
              threshold_ = threshold->valuedouble;
@@ -510,7 +528,7 @@ index 982bbe9..fc02af7 100644
          }
          if (cJSON_IsArray(commands)) {
              for (int i = 0; i < cJSON_GetArraySize(commands); i++) {
-@@ -120,11 +147,109 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list)
+@@ -120,11 +161,156 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list)
      multinet_->set_det_threshold(multinet_model_data_, threshold_);
      esp_mn_commands_clear();
      for (int i = 0; i < commands_.size(); i++) {
@@ -601,6 +619,53 @@ index 982bbe9..fc02af7 100644
 +            multinet_chunk_size);
 +        return false;
 +    }
++    if (multinet_chunk_size != static_cast<int>(kInferenceFrameSamples)) {
++        ESP_LOGE(
++            TAG,
++            "Unsupported MultiNet frame size: got=%d expected=%u",
++            multinet_chunk_size,
++            static_cast<unsigned>(kInferenceFrameSamples));
++        return false;
++    }
++
++    inference_ring_ = static_cast<WakeInferenceFrame*>(heap_caps_calloc(
++        kInferenceQueueCapacity,
++        sizeof(WakeInferenceFrame),
++        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
++    if (inference_ring_ == nullptr) {
++        ESP_LOGE(TAG, "Failed to allocate wake inference ring in PSRAM");
++        return false;
++    }
++
++    constexpr size_t inference_stack_size = 4096 * 2;
++    multinet_inference_task_stack_ = static_cast<StackType_t*>(heap_caps_malloc(
++        inference_stack_size,
++        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
++    multinet_inference_task_buffer_ = static_cast<StaticTask_t*>(heap_caps_malloc(
++        sizeof(StaticTask_t),
++        MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
++    if (multinet_inference_task_stack_ == nullptr ||
++        multinet_inference_task_buffer_ == nullptr) {
++        ESP_LOGE(TAG, "Failed to allocate asynchronous MultiNet task");
++        return false;
++    }
++    multinet_inference_task_ = xTaskCreateStaticPinnedToCore(
++        [](void* arg) {
++            auto* self = static_cast<CustomWakeWord*>(arg);
++            self->MultiNetInferenceTask();
++            vTaskDelete(nullptr);
++        },
++        "davie_multinet",
++        inference_stack_size,
++        this,
++        1,
++        multinet_inference_task_stack_,
++        multinet_inference_task_buffer_,
++        0);
++    if (multinet_inference_task_ == nullptr) {
++        ESP_LOGE(TAG, "Failed to create asynchronous MultiNet task");
++        return false;
++    }
 +
 +    BaseType_t task_result = xTaskCreatePinnedToCore(
 +        [](void* arg) {
@@ -608,12 +673,12 @@ index 982bbe9..fc02af7 100644
 +            self->AudioDetectionTask();
 +            vTaskDelete(nullptr);
 +        },
-+        "custom_wake_afe",
++        "custom_wake_fetch",
 +        4096 * 2,
 +        this,
 +        4,
 +        &audio_detection_task_,
-+        0);
++        1);
 +    if (task_result != pdPASS) {
 +        ESP_LOGE(TAG, "Failed to create custom wake detection task");
 +        return false;
@@ -621,10 +686,14 @@ index 982bbe9..fc02af7 100644
      return true;
  }
  
-@@ -133,77 +258,232 @@ void CustomWakeWord::OnWakeWordDetected(std::function<void(const std::string& wa
+@@ -133,81 +319,420 @@ void CustomWakeWord::OnWakeWordDetected(std::function<void(const std::string& wa
  }
  
  void CustomWakeWord::Start() {
++    {
++        std::lock_guard<std::mutex> lock(wake_word_mutex_);
++        wake_word_pcm_.clear();
++    }
 +    {
 +        std::lock_guard<std::mutex> lock(afe_feed_mutex_);
 +        afe_feed_buffer_.clear();
@@ -634,14 +703,15 @@ index 982bbe9..fc02af7 100644
 +    }
 +    {
 +        std::lock_guard<std::mutex> lock(multinet_mutex_);
-+        multinet_input_buffer_.clear();
++        inference_assembly_buffer_.clear();
 +        inference_gate_.Reset();
-+        if (multinet_model_data_ != nullptr) {
-+            multinet_->clean(multinet_model_data_);
-+        }
++        segment_coordinator_.Reset();
 +    }
      running_ = true;
 +    xEventGroupSetBits(event_group_, DETECTION_RUNNING_EVENT);
++    if (multinet_inference_task_ != nullptr) {
++        xTaskNotifyGive(multinet_inference_task_);
++    }
  }
  
  void CustomWakeWord::Stop() {
@@ -659,11 +729,12 @@ index 982bbe9..fc02af7 100644
 +    }
 +    {
 +        std::lock_guard<std::mutex> lock(multinet_mutex_);
-+        multinet_input_buffer_.clear();
++        inference_assembly_buffer_.clear();
 +        inference_gate_.Reset();
-+        if (multinet_model_data_ != nullptr) {
-+            multinet_->clean(multinet_model_data_);
-+        }
++        segment_coordinator_.Reset();
++    }
++    if (multinet_inference_task_ != nullptr) {
++        xTaskNotifyGive(multinet_inference_task_);
 +    }
  }
  
@@ -717,6 +788,7 @@ index 982bbe9..fc02af7 100644
 -                    
 -                    if (wake_word_detected_callback_) {
 -                        wake_word_detected_callback_(last_detected_wake_word_);
+-                    }
 +}
 +
 +size_t CustomWakeWord::GetFeedSize() {
@@ -727,35 +799,12 @@ index 982bbe9..fc02af7 100644
 +}
 +
 +void CustomWakeWord::AudioDetectionTask() {
-+    const size_t multinet_chunk_size =
-+        multinet_->get_samp_chunksize(multinet_model_data_);
 +    ESP_LOGI(
 +        TAG,
-+        "Custom wake AFE task started, feed=%d fetch=%d multinet=%d",
++        "Custom wake fetch task started, feed=%d fetch=%d queue=%u frames",
 +        afe_iface_->get_feed_chunksize(afe_data_),
 +        afe_iface_->get_fetch_chunksize(afe_data_),
-+        static_cast<int>(multinet_chunk_size));
-+
-+    int speech_frames = 0;
-+    int64_t segment_inference_us = 0;
-+    int64_t segment_max_inference_us = 0;
-+    const auto reset_segment_metrics = [&]() {
-+        speech_frames = 0;
-+        segment_inference_us = 0;
-+        segment_max_inference_us = 0;
-+    };
-+    const auto log_segment_metrics = [&]() {
-+        if (speech_frames == 0) {
-+            return;
-+        }
-+        ESP_LOGI(
-+            TAG,
-+            "Wake speech segment complete: frames=%d avg_inference_ms=%.1f max_inference_ms=%.1f",
-+            speech_frames,
-+            static_cast<double>(segment_inference_us) /
-+                speech_frames / 1000.0,
-+            static_cast<double>(segment_max_inference_us) / 1000.0);
-+    };
++        static_cast<unsigned>(kInferenceQueueCapacity - 1));
 +
 +    while (true) {
 +        xEventGroupWaitBits(
@@ -776,7 +825,6 @@ index 982bbe9..fc02af7 100644
 +        const size_t samples = result->data_size / sizeof(int16_t);
 +        StoreWakeWordData(std::vector<int16_t>(result->data, result->data + samples));
 +
-+        std::string detected_wake_word;
 +        {
 +            std::lock_guard<std::mutex> lock(multinet_mutex_);
 +            if (!running_) {
@@ -786,115 +834,314 @@ index 982bbe9..fc02af7 100644
 +                result->vad_state == VAD_SPEECH,
 +                result->vad_cache_size > 0);
 +
-+            if (decision.prepend_vad_cache &&
++            if (decision.starts_segment) {
++                const auto segment = segment_coordinator_.BeginCapture();
++                inference_assembly_buffer_.clear();
++                if (!segment.accepted) {
++                    ESP_LOGW(
++                        TAG,
++                        "Dropping overlapping wake segment while segment=%u is pending",
++                        static_cast<unsigned>(
++                            segment_coordinator_.PendingSegmentId()));
++                }
++            }
++
++            auto segment = segment_coordinator_.CaptureIdentity();
++            if (segment.accepted &&
++                decision.prepend_vad_cache &&
 +                result->vad_cache != nullptr) {
 +                const size_t cache_samples =
 +                    result->vad_cache_size / sizeof(int16_t);
-+                multinet_input_buffer_.insert(
-+                    multinet_input_buffer_.end(),
-+                    result->vad_cache,
-+                    result->vad_cache + cache_samples);
++                if (!QueueInferenceSamples(
++                        segment,
++                        result->vad_cache,
++                        cache_samples)) {
++                    segment_coordinator_.CancelCapture();
++                    inference_assembly_buffer_.clear();
++                    segment = segment_coordinator_.CaptureIdentity();
++                }
 +            }
-+            if (decision.process_frame) {
-+                multinet_input_buffer_.insert(
-+                    multinet_input_buffer_.end(),
-+                    result->data,
-+                    result->data + samples);
++            if (segment.accepted &&
++                !segment.cancelled &&
++                decision.process_frame) {
++                if (!QueueInferenceSamples(
++                        segment,
++                        result->data,
++                        samples)) {
++                    segment_coordinator_.CancelCapture();
++                    inference_assembly_buffer_.clear();
++                    segment = segment_coordinator_.CaptureIdentity();
+                 }
+             }
+-            multinet_->clean(multinet_model_data_);
+-        } else if (mn_state == ESP_MN_STATE_TIMEOUT) {
+-            ESP_LOGD(TAG, "Command word detection timeout, cleaning state");
+-            multinet_->clean(multinet_model_data_);
++
++            if (decision.ends_segment) {
++                inference_assembly_buffer_.clear();
++                const auto ended = segment_coordinator_.EndCapture();
++                if (ended.accepted && !QueueInferenceMarker(ended)) {
++                    ESP_LOGE(
++                        TAG,
++                        "Wake inference queue could not close segment=%u",
++                        static_cast<unsigned>(ended.segment_id));
++                    segment_coordinator_.FinishInference(
++                        ended.generation,
++                        ended.segment_id);
++                }
++            } else if (!decision.process_frame &&
++                       !inference_gate_.IsSpeechActive()) {
++                inference_assembly_buffer_.clear();
++            }
+         }
+-        
+-        if (!running_) {
+-            break;
++    }
++}
++
++bool CustomWakeWord::QueueInferenceSamples(
++    const davie::audio::WakeSegmentIdentity& segment,
++    const int16_t* samples,
++    size_t sample_count) {
++    if (!segment.accepted || segment.cancelled ||
++        samples == nullptr || sample_count == 0) {
++        return segment.accepted && !segment.cancelled;
++    }
++
++    inference_assembly_buffer_.insert(
++        inference_assembly_buffer_.end(),
++        samples,
++        samples + sample_count);
++    while (inference_assembly_buffer_.size() >= kInferenceFrameSamples) {
++        if (!QueueInferenceFrame(
++                segment,
++                inference_assembly_buffer_.data(),
++                kInferenceFrameSamples,
++                kInferenceFrameNone)) {
++            inference_queue_overflows_.fetch_add(1, std::memory_order_relaxed);
++            ESP_LOGE(
++                TAG,
++                "Wake inference ring overflow: segment=%u count=%u",
++                static_cast<unsigned>(segment.segment_id),
++                static_cast<unsigned>(
++                    inference_queue_overflows_.load(std::memory_order_relaxed)));
++            return false;
+         }
+-        input_buffer_.erase(input_buffer_.begin(), input_buffer_.begin() + chunksize);
++        inference_assembly_buffer_.erase(
++            inference_assembly_buffer_.begin(),
++            inference_assembly_buffer_.begin() + kInferenceFrameSamples);
+     }
++    return true;
+ }
+ 
+-size_t CustomWakeWord::GetFeedSize() {
+-    if (multinet_model_data_ == nullptr) {
+-        return 0;
++bool CustomWakeWord::QueueInferenceMarker(
++    const davie::audio::WakeSegmentIdentity& segment) {
++    uint8_t flags = kInferenceFrameSegmentEnd;
++    if (segment.cancelled ||
++        segment_coordinator_.IsCancelled(segment.segment_id)) {
++        flags |= kInferenceFrameSegmentCancelled;
++    }
++    return QueueInferenceFrame(segment, nullptr, 0, flags);
++}
++
++bool CustomWakeWord::QueueInferenceFrame(
++    const davie::audio::WakeSegmentIdentity& segment,
++    const int16_t* samples,
++    size_t sample_count,
++    uint8_t flags) {
++    if (inference_ring_ == nullptr ||
++        sample_count > kInferenceFrameSamples) {
++        return false;
++    }
++
++    const size_t write =
++        inference_write_index_.load(std::memory_order_relaxed);
++    const size_t next = (write + 1) % kInferenceQueueCapacity;
++    if (next == inference_read_index_.load(std::memory_order_acquire)) {
++        return false;
++    }
++
++    auto& frame = inference_ring_[write];
++    frame.generation = segment.generation;
++    frame.segment_id = segment.segment_id;
++    frame.sample_count = static_cast<uint16_t>(sample_count);
++    frame.flags = flags;
++    if (sample_count > 0 && samples != nullptr) {
++        std::memcpy(
++            frame.samples,
++            samples,
++            sample_count * sizeof(int16_t));
++    }
++    inference_write_index_.store(next, std::memory_order_release);
++    if (multinet_inference_task_ != nullptr) {
++        xTaskNotifyGive(multinet_inference_task_);
++    }
++    return true;
++}
++
++void CustomWakeWord::MultiNetInferenceTask() {
++    ESP_LOGI(
++        TAG,
++        "Asynchronous MultiNet task started: core=0 priority=1 yield_every=4");
++
++    uint32_t active_generation = 0;
++    uint32_t active_segment_id = 0;
++    int speech_frames = 0;
++    int64_t segment_inference_us = 0;
++    int64_t segment_max_inference_us = 0;
++    uint32_t frames_since_delay = 0;
++
++    const auto reset_metrics = [&]() {
++        speech_frames = 0;
++        segment_inference_us = 0;
++        segment_max_inference_us = 0;
++    };
++    const auto close_active_segment = [&](bool cancelled) {
++        if (active_segment_id == 0) {
++            return;
++        }
++        if (speech_frames > 0) {
++            ESP_LOGI(
++                TAG,
++                "Wake speech segment complete: segment=%u frames=%d avg_inference_ms=%.1f max_inference_ms=%.1f cancelled=%d",
++                static_cast<unsigned>(active_segment_id),
++                speech_frames,
++                static_cast<double>(segment_inference_us) /
++                    speech_frames / 1000.0,
++                static_cast<double>(segment_max_inference_us) / 1000.0,
++                cancelled);
++        }
++        multinet_->clean(multinet_model_data_);
++        segment_coordinator_.FinishInference(
++            active_generation,
++            active_segment_id);
++        active_generation = 0;
++        active_segment_id = 0;
++        reset_metrics();
++    };
++
++    while (true) {
++        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
++
++        while (true) {
++            const size_t read =
++                inference_read_index_.load(std::memory_order_relaxed);
++            if (read == inference_write_index_.load(std::memory_order_acquire)) {
++                if (active_segment_id != 0 &&
++                    segment_coordinator_.IsCancelled(active_segment_id)) {
++                    close_active_segment(true);
++                }
++                break;
 +            }
 +
-+            while (decision.process_frame &&
-+                   multinet_input_buffer_.size() >= multinet_chunk_size &&
-+                   running_) {
++            auto& frame = inference_ring_[read];
++            const size_t next = (read + 1) % kInferenceQueueCapacity;
++            const uint32_t frame_generation = frame.generation;
++            const uint32_t frame_segment_id = frame.segment_id;
++            const uint8_t frame_flags = frame.flags;
++
++            if (!segment_coordinator_.IsCurrent(
++                    frame_generation,
++                    frame_segment_id)) {
++                inference_read_index_.store(next, std::memory_order_release);
++                if (active_segment_id == frame_segment_id) {
++                    close_active_segment(true);
++                }
++                continue;
++            }
++
++            if (active_segment_id != frame_segment_id ||
++                active_generation != frame_generation) {
++                if (active_segment_id != 0) {
++                    close_active_segment(true);
++                }
++                active_generation = frame_generation;
++                active_segment_id = frame_segment_id;
++                multinet_->clean(multinet_model_data_);
++                reset_metrics();
++            }
++
++            const bool cancelled =
++                (frame_flags & kInferenceFrameSegmentCancelled) != 0 ||
++                segment_coordinator_.IsCancelled(frame_segment_id);
++            std::string detected_wake_word;
++            if (!cancelled && frame.sample_count > 0) {
 +                const int64_t inference_started_at = esp_timer_get_time();
 +                const esp_mn_state_t state =
-+                    multinet_->detect(multinet_model_data_, multinet_input_buffer_.data());
++                    multinet_->detect(multinet_model_data_, frame.samples);
 +                const int64_t inference_us =
 +                    esp_timer_get_time() - inference_started_at;
 +                segment_inference_us += inference_us;
 +                segment_max_inference_us =
 +                    std::max(segment_max_inference_us, inference_us);
 +                ++speech_frames;
-+                multinet_input_buffer_.erase(
-+                    multinet_input_buffer_.begin(),
-+                    multinet_input_buffer_.begin() + multinet_chunk_size);
 +
 +                if (state == ESP_MN_STATE_DETECTED) {
 +                    esp_mn_results_t* mn_result =
 +                        multinet_->get_results(multinet_model_data_);
-+                    for (int index = 0; index < mn_result->num && running_; ++index) {
++                    for (int index = 0;
++                         index < mn_result->num && running_;
++                         ++index) {
 +                        const int command_id = mn_result->command_id[index];
 +                        ESP_LOGI(
 +                            TAG,
-+                            "Custom wake word detected: command_id=%d string=%s prob=%f",
++                            "Custom wake word detected: command_id=%d string=%s prob=%f segment=%u",
 +                            command_id,
 +                            mn_result->string,
-+                            mn_result->prob[index]);
++                            mn_result->prob[index],
++                            static_cast<unsigned>(frame_segment_id));
 +                        if (command_id <= 0 ||
 +                            command_id > static_cast<int>(commands_.size())) {
-+                            ESP_LOGW(TAG, "Ignoring invalid custom wake command id: %d", command_id);
++                            ESP_LOGW(
++                                TAG,
++                                "Ignoring invalid custom wake command id: %d",
++                                command_id);
 +                            continue;
 +                        }
 +                        auto& command = commands_[command_id - 1];
 +                        if (command.action == "wake") {
 +                            detected_wake_word = command.text;
-+                            last_detected_wake_word_ = detected_wake_word;
-+                            running_ = false;
-+                            xEventGroupClearBits(
-+                                event_group_,
-+                                DETECTION_RUNNING_EVENT);
++                            break;
 +                        }
-                     }
-+                    multinet_->clean(multinet_model_data_);
-+                } else if (state == ESP_MN_STATE_TIMEOUT) {
-+                    ESP_LOGD(TAG, "Command word detection timeout, cleaning state");
-+                    multinet_->clean(multinet_model_data_);
-+                    multinet_input_buffer_.clear();
-+                    inference_gate_.SuppressUntilSilence();
-+                    log_segment_metrics();
-+                    reset_segment_metrics();
-+                    break;
-                 }
-+
++                    }
++                }
 +            }
 +
-+            if (decision.reset_model) {
-+                log_segment_metrics();
-+                multinet_->clean(multinet_model_data_);
-+                multinet_input_buffer_.clear();
-+                reset_segment_metrics();
-+            } else if (!decision.process_frame && !inference_gate_.IsSpeechActive()) {
-+                multinet_input_buffer_.clear();
++            const bool segment_end =
++                (frame_flags & kInferenceFrameSegmentEnd) != 0;
++            inference_read_index_.store(next, std::memory_order_release);
++
++            if (!detected_wake_word.empty() &&
++                segment_coordinator_.IsCurrent(
++                    frame_generation,
++                    frame_segment_id)) {
++                last_detected_wake_word_ = detected_wake_word;
++                running_ = false;
++                xEventGroupClearBits(
++                    event_group_,
++                    DETECTION_RUNNING_EVENT);
++                close_active_segment(false);
++                {
++                    std::lock_guard<std::mutex> lock(afe_feed_mutex_);
++                    afe_feed_buffer_.clear();
++                    afe_iface_->reset_buffer(afe_data_);
++                }
++                if (wake_word_detected_callback_) {
++                    wake_word_detected_callback_(detected_wake_word);
++                }
++            } else if (segment_end || cancelled) {
++                close_active_segment(cancelled);
 +            }
 +
-+            if (!running_) {
-+                multinet_input_buffer_.clear();
-+                inference_gate_.Reset();
-+                reset_segment_metrics();
-             }
--            multinet_->clean(multinet_model_data_);
--        } else if (mn_state == ESP_MN_STATE_TIMEOUT) {
--            ESP_LOGD(TAG, "Command word detection timeout, cleaning state");
--            multinet_->clean(multinet_model_data_);
--        }
--        
--        if (!running_) {
--            break;
-         }
--        input_buffer_.erase(input_buffer_.begin(), input_buffer_.begin() + chunksize);
--    }
--}
- 
--size_t CustomWakeWord::GetFeedSize() {
--    if (multinet_model_data_ == nullptr) {
--        return 0;
-+        if (!detected_wake_word.empty()) {
-+            {
-+                std::lock_guard<std::mutex> lock(afe_feed_mutex_);
-+                afe_feed_buffer_.clear();
-+                afe_iface_->reset_buffer(afe_data_);
-+            }
-+            if (wake_word_detected_callback_) {
-+                wake_word_detected_callback_(detected_wake_word);
++            if (++frames_since_delay >= 4) {
++                frames_since_delay = 0;
++                vTaskDelay(1);
 +            }
 +        }
      }
@@ -902,8 +1149,54 @@ index 982bbe9..fc02af7 100644
  }
  
  void CustomWakeWord::StoreWakeWordData(const std::vector<int16_t>& data) {
+-    // store audio data to wake_word_pcm_
++    std::lock_guard<std::mutex> lock(wake_word_mutex_);
+     wake_word_pcm_.push_back(data);
+     // keep about 2 seconds of data, detect duration is 30ms (sample_rate == 16000, chunksize == 512)
+     while (wake_word_pcm_.size() > 2000 / 30) {
+@@ -217,7 +742,10 @@ void CustomWakeWord::StoreWakeWordData(const std::vector<int16_t>& data) {
+ 
+ void CustomWakeWord::EncodeWakeWordData() {
+     const size_t stack_size = 4096 * 7;
+-    wake_word_opus_.clear();
++    {
++        std::lock_guard<std::mutex> lock(wake_word_mutex_);
++        wake_word_opus_.clear();
++    }
+     if (wake_word_encode_task_stack_ == nullptr) {
+         wake_word_encode_task_stack_ = (StackType_t*)heap_caps_malloc(stack_size, MALLOC_CAP_SPIRAM);
+         assert(wake_word_encode_task_stack_ != nullptr);
+@@ -230,6 +758,11 @@ void CustomWakeWord::EncodeWakeWordData() {
+     wake_word_encode_task_ = xTaskCreateStatic([](void* arg) {
+         auto this_ = (CustomWakeWord*)arg;
+         {
++            std::deque<std::vector<int16_t>> pcm_frames;
++            {
++                std::lock_guard<std::mutex> lock(this_->wake_word_mutex_);
++                pcm_frames.swap(this_->wake_word_pcm_);
++            }
+             auto start_time = esp_timer_get_time();
+             // Create encoder
+             esp_opus_enc_config_t opus_enc_cfg = AS_OPUS_ENC_CONFIG();
+@@ -252,7 +785,7 @@ void CustomWakeWord::EncodeWakeWordData() {
+             std::vector<int16_t> in_buffer;
+             esp_audio_enc_in_frame_t in = {};
+             esp_audio_enc_out_frame_t out = {};
+-            for (auto& pcm: this_->wake_word_pcm_) {
++            for (auto& pcm: pcm_frames) {
+                 if (in_buffer.empty()) {
+                     in_buffer = std::move(pcm);
+                 } else {
+@@ -278,7 +811,6 @@ void CustomWakeWord::EncodeWakeWordData() {
+                     in_buffer.erase(in_buffer.begin(), in_buffer.begin() + frame_size);
+                 }
+             }
+-            this_->wake_word_pcm_.clear();
+             // Close encoder
+             esp_opus_enc_close(encoder_handle);
+             auto end_time = esp_timer_get_time();
 diff --git a/main/audio/wake_words/custom_wake_word.h b/main/audio/wake_words/custom_wake_word.h
-index 645ad1b..1aaf2f7 100644
+index 645ad1b..7ce3008 100644
 --- a/main/audio/wake_words/custom_wake_word.h
 +++ b/main/audio/wake_words/custom_wake_word.h
 @@ -2,9 +2,13 @@
@@ -920,15 +1213,41 @@ index 645ad1b..1aaf2f7 100644
  
  #include <deque>
  #include <string>
-@@ -15,6 +19,7 @@
+@@ -15,6 +19,8 @@
  #include <atomic>
  
  #include "audio_codec.h"
 +#include "audio/davie_wake_inference_gate.h"
++#include "audio/davie_wake_segment_coordinator.h"
  #include "wake_word.h"
  
  class CustomWakeWord : public WakeWord {
-@@ -42,6 +47,8 @@ private:
+@@ -33,6 +39,24 @@ public:
+     const std::string& GetLastDetectedWakeWord() const { return last_detected_wake_word_; }
+ 
+ private:
++    static constexpr size_t kInferenceFrameSamples = 512;
++    static constexpr size_t kInferenceQueueCapacity = 128;
++
++    enum InferenceFrameFlags : uint8_t {
++        kInferenceFrameNone = 0,
++        kInferenceFrameSegmentEnd = 1 << 0,
++        kInferenceFrameSegmentCancelled = 1 << 1,
++    };
++
++    struct WakeInferenceFrame {
++        uint32_t generation = 0;
++        uint32_t segment_id = 0;
++        uint16_t sample_count = 0;
++        uint8_t flags = kInferenceFrameNone;
++        uint8_t reserved = 0;
++        int16_t samples[kInferenceFrameSamples] = {};
++    };
++
+     struct Command {
+         std::string command;
+         std::string text;
+@@ -42,6 +66,8 @@ private:
      // multinet 相关成员变量
      esp_mn_iface_t* multinet_ = nullptr;
      model_iface_data_t* multinet_model_data_ = nullptr;
@@ -937,7 +1256,7 @@ index 645ad1b..1aaf2f7 100644
      srmodel_list_t *models_ = nullptr;
      char* mn_name_ = nullptr;
      std::string language_ = "cn";
-@@ -53,8 +60,13 @@ private:
+@@ -53,8 +79,21 @@ private:
      AudioCodec* codec_ = nullptr;
      std::string last_detected_wake_word_;
      std::atomic<bool> running_ = false;
@@ -945,19 +1264,39 @@ index 645ad1b..1aaf2f7 100644
 -    std::mutex input_buffer_mutex_;
 +    EventGroupHandle_t event_group_ = nullptr;
 +    std::vector<int16_t> afe_feed_buffer_;
-+    std::vector<int16_t> multinet_input_buffer_;
++    std::vector<int16_t> inference_assembly_buffer_;
 +    std::mutex afe_feed_mutex_;
 +    std::mutex multinet_mutex_;
 +    TaskHandle_t audio_detection_task_ = nullptr;
++    TaskHandle_t multinet_inference_task_ = nullptr;
++    StaticTask_t* multinet_inference_task_buffer_ = nullptr;
++    StackType_t* multinet_inference_task_stack_ = nullptr;
++    WakeInferenceFrame* inference_ring_ = nullptr;
++    std::atomic<size_t> inference_write_index_{0};
++    std::atomic<size_t> inference_read_index_{0};
++    std::atomic<uint32_t> inference_queue_overflows_{0};
 +    davie::audio::DavieWakeInferenceGate inference_gate_;
++    davie::audio::DavieWakeSegmentCoordinator segment_coordinator_;
  
      TaskHandle_t wake_word_encode_task_ = nullptr;
      StaticTask_t* wake_word_encode_task_buffer_ = nullptr;
-@@ -66,6 +78,7 @@ private:
+@@ -66,6 +105,19 @@ private:
  
      void StoreWakeWordData(const std::vector<int16_t>& data);
      void ParseWakenetModelConfig();
 +    void AudioDetectionTask();
++    void MultiNetInferenceTask();
++    bool QueueInferenceSamples(
++        const davie::audio::WakeSegmentIdentity& segment,
++        const int16_t* samples,
++        size_t sample_count);
++    bool QueueInferenceMarker(
++        const davie::audio::WakeSegmentIdentity& segment);
++    bool QueueInferenceFrame(
++        const davie::audio::WakeSegmentIdentity& segment,
++        const int16_t* samples,
++        size_t sample_count,
++        uint8_t flags);
  };
  
  #endif

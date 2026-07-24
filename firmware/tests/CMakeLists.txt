@@ -60,3 +60,18 @@ add_test(
     NAME davie_wake_inference_gate_test
     COMMAND $<TARGET_FILE:davie_wake_inference_gate_test>
 )
+
+add_executable(davie_wake_segment_coordinator_test
+    davie_wake_segment_coordinator_test.cpp
+)
+
+target_include_directories(davie_wake_segment_coordinator_test PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/../main
+)
+
+target_compile_features(davie_wake_segment_coordinator_test PRIVATE cxx_std_17)
+
+add_test(
+    NAME davie_wake_segment_coordinator_test
+    COMMAND $<TARGET_FILE:davie_wake_segment_coordinator_test>
+)

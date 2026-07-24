@@ -14,18 +14,22 @@ int main()
     assert(!decision.reset_model);
 
     decision = gate.OnFrame(true, true);
+    assert(decision.starts_segment);
     assert(decision.prepend_vad_cache);
     assert(decision.process_frame);
+    assert(!decision.ends_segment);
     assert(!decision.reset_model);
     assert(gate.IsSpeechActive());
 
     decision = gate.OnFrame(true, true);
+    assert(!decision.starts_segment);
     assert(!decision.prepend_vad_cache);
     assert(decision.process_frame);
     assert(!decision.reset_model);
 
     decision = gate.OnFrame(false, false);
     assert(decision.process_frame);
+    assert(decision.ends_segment);
     assert(decision.reset_model);
     assert(!gate.IsSpeechActive());
 
@@ -41,6 +45,7 @@ int main()
     }
     decision = gate.OnFrame(true, false);
     assert(!decision.process_frame);
+    assert(decision.ends_segment);
     assert(decision.reset_model);
     assert(gate.IsSuppressed());
 

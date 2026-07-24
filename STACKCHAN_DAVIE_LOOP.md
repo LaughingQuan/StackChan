@@ -403,3 +403,16 @@ handoff:
 - 根因修正: 前一版虽调整优先级，却仍把 AFE 内部任务和同步 MultiNet 推理固定在 CPU1，优先级不能消除同核串行计算。官方基准显示 MultiNet5 Q8 应约 12 ms/32 ms，因此先验证任务隔离而非降低 AEC 质量或盲目调低检测阈值。
 - 当前修复: AFE 保持 CPU1、SR high-performance AEC；MultiNet 迁移到 CPU0、优先级 4，仍低于 CPU0 的实时音频采集优先级 8；移除每帧额外 10 ms delay；WebRTC VAD 从 mode 0 调到 mode 2，减少稳定环境噪声形成长识别段。
 - 自动验证: 固件 host tests `4/4 passed`；ESP-IDF 增量 build 成功，app `0x447000`、13% free。下一步必须从新提交重建、app-only 刷写并以串口比较 ring-full 数量和真实 MultiNet 平均/峰值，未通过则继续留在 P1。
+
+### 【修复中】Codex 2026-07-24 19:05 Asia/Singapore — P1 wake working-set cache canary (TTL 8h)
+- 三次调度事实: 提交 `67d4804866f1` 已把 AFE 与 MultiNet 分到不同核心，真机仍持续出现 AFE feed ringbuffer full；MultiNet 平均 `66.0-68.6 ms`、峰值 `114.1 ms`，远超 32 ms 音频帧预算，并出现 AudioInputTask/CustomWakeWord 看门狗证据。因此不请求真人验收，也不把该镜像判定为通过。
+- 官方对照: ESP-SR 明确要求 MultiNet 在 WakeNet 之后用于命令识别；官方 ESP32-S3 基准中 MultiNet5 Q8 为约 `12 ms / 32 ms`，WakeNet9 为约 `3 ms / 32 ms`。当前固件使用 32 KiB data cache，而官方性能配置使用 64 KiB，MultiNet 约 2.3 MiB PSRAM 工作集存在严重 cache miss 的合理嫌疑。
+- 当前 canary: 只把 ESP32-S3 data cache 从 32 KiB 调整为 64 KiB，保持 240 MHz、64-byte cache line、SR high-performance AEC、模型、阈值和双核任务布局均不变，以隔离验证 cache 是否为约 5 倍性能差异的根因。
+- 门禁: host tests、完整单进程 build、app-only flash 与串口实测全部通过才保留。若平均推理仍高于 32 ms 或出现 ring-full/WDT，立即回退该实验并改为 AFE/VAD 实时采集 + 独立低优先级分段 MultiNet 的两级架构；不再继续盲调阈值或优先级。
+
+### 【修复中】Codex 2026-07-24 19:28 Asia/Singapore — P1 asynchronous wake pipeline (TTL 8h)
+- cache canary 结论: 64 KiB data cache 将 MultiNet 平均帧耗时从约 `66 ms` 降到 `47.7-48.7 ms`，但仍高于 32 ms 实时预算；115 秒真机窗口出现 `251` 次 AFE ring-full、task watchdog、`0` 次可靠唤醒。因此 cache 只能作为延迟优化组件，不能单独解决根因。
+- 结构修复: AFE/VAD fetch 固定在 core 1，只做实时采集、VAD cache 首音节补偿和有界入队；MultiNet 固定在 core 0 的低优先级独立任务，使用 127 帧 PSRAM SPSC ring、每 4 帧主动阻塞让出 CPU，并以 generation/segment 身份拒绝 Stop/Start 后旧结果。同一时间只接受一个候选语音段，重叠段、队列溢出和取消段均 fail closed。
+- 并发修复: 唤醒前滚 PCM 在编码任务启动时通过 mutex 原子交换快照，避免异步识别回调与 AFE fetch 同时修改同一 deque；每次重新 Start 会清除晚到的旧 PCM。
+- 自动验证: 新增 segment coordinator 状态机测试，覆盖忙时拒绝、取消、generation reset、旧 inference 不得清除新 segment；firmware host tests `5/5 passed`。Gateway `81 passed`，Hermes Stack-chan 插件/安装器 `45 passed`。ESP-IDF 5.5.4 `fullclean` 后完整单进程 build 成功，app `0x447ad0`、13% free；生成 3 KiB 分区表与物理备份逐字节一致；vendor patch 可在 detached upstream clone 通过 `git apply --check`；本轮新增行凭据扫描 `0` 命中。
+- 下一门禁: 从原子提交重新构建并只刷 app partition；串口必须证明 PSRAM ring/外部任务栈初始化成功、AFE ring-full/WDT/panic/reboot 为零，且 TF、摄像头、触控、Wi-Fi 与 Gateway 无回归。通过后才允许合成 canary，最后才请求一次真人声学验收。

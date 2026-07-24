@@ -7,8 +7,10 @@ namespace davie::audio {
 constexpr std::size_t kWakeInferenceMaxSpeechFrames = 100;
 
 struct WakeInferenceDecision {
+    bool starts_segment = false;
     bool prepend_vad_cache = false;
     bool process_frame = false;
+    bool ends_segment = false;
     bool reset_model = false;
 };
 
@@ -33,6 +35,7 @@ public:
             speech_frames_ = 0;
             WakeInferenceDecision decision;
             decision.process_frame = true;
+            decision.ends_segment = true;
             decision.reset_model = true;
             return decision;
         }
@@ -49,11 +52,13 @@ public:
             speech_frames_ = 0;
             suppress_until_silence_ = true;
             WakeInferenceDecision decision;
+            decision.ends_segment = true;
             decision.reset_model = true;
             return decision;
         }
 
         WakeInferenceDecision decision;
+        decision.starts_segment = starts_speech;
         decision.prepend_vad_cache = starts_speech && has_vad_cache;
         decision.process_frame = true;
         return decision;
