@@ -16,7 +16,6 @@ from typing import Any
 
 from .audio import pcm_to_wav
 
-
 MAX_CAPTURE_SECONDS = 10
 LOGGER = logging.getLogger(__name__)
 
@@ -259,13 +258,23 @@ class AudioDiagnosticStore:
             os.replace(temporary, destination)
 
             if self.nas_root is not None:
+                nas_temporary: Path | None = None
                 try:
                     nas_destination = self.nas_root / capture_id
                     nas_temporary = self.nas_root / f".{capture_id}.tmp-{os.getpid()}"
                     self.nas_root.mkdir(parents=True, exist_ok=True)
                     if nas_temporary.exists():
                         shutil.rmtree(nas_temporary)
-                    shutil.copytree(destination, nas_temporary)
+                    nas_temporary.mkdir(parents=False, exist_ok=False)
+                    # NAS mounts commonly reject chmod/utime even when content
+                    # writes and atomic renames are permitted. copytree()
+                    # preserves metadata and would therefore reject a valid
+                    # archive target.
+                    for filename in ("capture.wav", "manifest.json"):
+                        shutil.copyfile(
+                            destination / filename,
+                            nas_temporary / filename,
+                        )
                     if nas_destination.exists():
                         shutil.rmtree(nas_destination)
                     os.replace(nas_temporary, nas_destination)
@@ -278,8 +287,15 @@ class AudioDiagnosticStore:
                         final_record,
                     )
                 except OSError as exc:
+                    if nas_temporary is not None:
+                        shutil.rmtree(nas_temporary, ignore_errors=True)
                     final_record["nas_sync_status"] = "failed"
                     final_record["error"] = f"nas_sync_{type(exc).__name__}"
+                    LOGGER.warning(
+                        "Unable to sync diagnostic audio capture %s to NAS",
+                        capture_id,
+                        exc_info=True,
+                    )
             self._write_manifest(destination / "manifest.json", final_record)
             with self._lock:
                 self._upsert_recent_locked(final_record)

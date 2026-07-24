@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 import wave
 
@@ -110,6 +111,38 @@ def test_audio_diagnostic_is_bounded_persisted_and_synced(tmp_path) -> None:
         assert reloaded.snapshot("stackchan-test")["recent"][0]["status"] == "ready"
     finally:
         reloaded.close()
+
+
+def test_audio_diagnostic_nas_sync_does_not_require_metadata_updates(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    def reject_metadata_updates(*_args, **_kwargs) -> None:
+        raise PermissionError("NAS metadata updates are disabled")
+
+    monkeypatch.setattr(shutil, "copystat", reject_metadata_updates)
+    local = tmp_path / "local"
+    nas = tmp_path / "nas"
+    store = AudioDiagnosticStore(local, nas_root=nas)
+    try:
+        armed = store.arm(
+            device_id="stackchan-nas",
+            session_id="session-1",
+            duration_seconds=1,
+        )
+        store.feed(
+            "stackchan-nas",
+            "session-1",
+            b"\x01\x00" * 16000,
+            16000,
+        )
+        assert store.wait_for_idle(timeout=5)
+        receipt = store.snapshot("stackchan-nas")["recent"][0]
+        assert receipt["status"] == "ready"
+        assert receipt["nas_sync_status"] == "synced"
+        assert (nas / armed["capture_id"] / "capture.wav").is_file()
+    finally:
+        store.close()
 
 
 def test_audio_diagnostic_fails_closed_when_session_changes(tmp_path) -> None:
