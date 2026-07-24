@@ -348,7 +348,7 @@ handoff:
 - 花费: ¥0；没有调用模型、云端或付费 API。
 - 边界: 没有修改运行代码、生产服务、凭据、固件或设备状态。
 
-### 【进行中】Codex 2026-07-24 11:39 Asia/Singapore — Desktop Robot P0 identity and evidence loop (TTL 8h)
+### 【已关闭】Codex 2026-07-24 11:39 Asia/Singapore — Desktop Robot P0 identity and evidence loop (TTL 8h)
 - 正在改: `firmware/main/hal/{hal_mcp.cpp,hal_ws_avatar.cpp}`, `firmware/main/hal/board/{davie_device_attestation.*,stackchan_display.cc}`, `firmware/main/CMakeLists.txt`, `integrations/davie-gateway/**`, corresponding Gateway/firmware tests, P0 report, and this ledger.
 - 目标: prove exact firmware/audio/wake/TF/network identity, separate service/device/audio health, preserve one bounded diagnostic timeline, and establish restart/reconnect evidence before any P1 acoustic tuning.
 - 验证: focused protocol/session/app tests after each slice; full Gateway suite, firmware host tests/full ESP-IDF build, secret scan, diff check, device hello/MCP receipt, 20 reconnect cycles, and 30-minute online evidence.
@@ -363,3 +363,13 @@ handoff:
 - 自动验证: Gateway 全量 `80 passed`；Gateway wheel/sdist 0.6.0 构建成功；固件 full ESP-IDF build 成功，app `0x4456f0`、分区剩余 `0xaa910`（13%）；`motion_math_test` 与 `davie_tf_text_test` 均 exit 0；`git diff --check` 通过；新增 diff 未发现真实凭据。
 - 仍未通过: 实体设备 `192.168.50.210` 当前离线且无 USB serial，因此未刷最终固件，未取得设备 attestation，未执行物理 20/20 断电重连或连续 30 分钟在线。P0 不得标记整体通过，不进入 P1。
 - 花费/边界: ¥0；没有调用云端或付费模型；没有修改 Davie executor/proactivity；没有格式化 TF；没有把模拟 20 次 WebSocket 重连测试冒充物理断电重连。
+
+### 【完成】Codex 2026-07-24 16:50 Asia/Singapore — Desktop Robot P0 engineering and endurance gate
+- 实体恢复: 设备通过 USB 与 `192.168.50.210` 恢复在线；刷写后的 MCP attestation 精确匹配 `stack-chan 1.4.3`、源码 `032f1a60f0ec` 与 ELF SHA256 `695fc028…bb682f7`。TF 14,895 MiB 可写、自检通过，AFE、设备 AEC、参考声道与低延迟 Wi-Fi 均由实体设备回执。
+- 现场修复: 修复 attestation 中 64 位 TF 容量格式化触发的 newlib nano 崩溃；修复 NAS 支持内容写入但拒绝 Unix metadata 时 `copystat` 导致诊断归档失败。Gateway 升级到 0.6.1；源码提交 `8761d5ea4eea72a40ac4a65b4931269fbd1e74c0`，部署固件保持可证明的 `032f1a60f0ec`。
+- 重连/耐久: 20/20 次自动 USB 硬复位均完成 USB 重新枚举、Wi-Fi 恢复和 ping 3/3，平均 7.670 秒、最慢 7.754 秒。30 分钟监测 60/60 样本通过、零失败，持续 1770.037 秒，平均 ping 4.587ms、最大 12.462ms。
+- 最终复核: 耐久后第 6 次 Mac 合成 `Hey, Davie` 建立完整会话；handshake、identity、firmware expectation、attestation 与 audio flowing 全部通过，设备 uptime 2,039,403ms，随后管理员休眠正常关闭会话。
+- 音频诊断: 一次显式授权的 2,000ms/64,044-byte/16kHz WAV 已定位到 Gateway 实际 AFE output；本地与 NAS SHA256 均为 `27634f38…40acd0`，归档状态 `synced`。
+- 自动验证: Gateway 81 passed；固件 host 2/2；ESP-IDF `fullclean` 后单进程完整 build 成功，app `0x4459c0`、13% free；Davie Platform 196 passed，structure/contracts/AsyncAPI/Ruff/compile/wheel/restart smoke 全部通过。生产 Stack gateway active、`NRestarts=0`、无新 traceback/exception。
+- 证据: `/mnt/nas-backups/Hermes/diagnostics/stackchan-p0/20260724` 保存重连、耐久、最终 attestation 与受保护诊断，4 个 JSON 的 SHA256 清单逐一通过。
+- 边界: ¥0；没有调用模型、云端或付费 API；没有修改或重启 Davie Gateway/executor/proactivity；没有格式化 TF。自动硬复位不冒充 20 次真人拔电，合成音频第 6 次命中不冒充真人唤醒率；P1 必须修复 raw-channel wake path 并通过真人声学门。
