@@ -186,16 +186,19 @@ std::string DavieTfStorage::StatusJson() const
     const bool checkpoint_present =
         mounted_ && stat(kReaderCheckpointPath, &checkpoint_stat) == 0 && checkpoint_stat.st_size > 0;
 
-    char numeric[384];
-    snprintf(numeric, sizeof(numeric),
-             R"("mount_attempted":%s,"mounted":%s,"writable":%s,"self_test_passed":%s,"total_bytes":%llu,"free_bytes":%llu,"note_count":%u,"diagnostic_count":%u,"reader_checkpoint_present":%s)",
-             mount_attempted_ ? "true" : "false", mounted_ ? "true" : "false", writable_ ? "true" : "false",
-             self_test_passed_ ? "true" : "false", static_cast<unsigned long long>(total_bytes_),
-             static_cast<unsigned long long>(free_bytes_), static_cast<unsigned>(note_count),
-             static_cast<unsigned>(diagnostic_count), checkpoint_present ? "true" : "false");
-
-    return std::string("{\"enabled\":true,\"mount_point\":\"") + kMountPoint + "\"," + numeric +
-           ",\"last_error\":\"" + davie::tf::JsonEscape(last_error_) + "\"}";
+    davie::tf::StorageStatus status;
+    status.mount_point = kMountPoint;
+    status.mount_attempted = mount_attempted_;
+    status.mounted = mounted_;
+    status.writable = writable_;
+    status.self_test_passed = self_test_passed_;
+    status.total_bytes = total_bytes_;
+    status.free_bytes = free_bytes_;
+    status.note_count = note_count;
+    status.diagnostic_count = diagnostic_count;
+    status.reader_checkpoint_present = checkpoint_present;
+    status.last_error = last_error_;
+    return davie::tf::BuildStorageStatusJson(status);
 }
 
 std::string DavieTfStorage::SaveNote(const std::string& text)

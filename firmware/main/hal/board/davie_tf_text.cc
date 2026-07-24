@@ -122,4 +122,39 @@ std::string NormalizeSingleLineUtf8(const std::string& value, size_t max_bytes)
     return normalized;
 }
 
+std::string BuildStorageStatusJson(const StorageStatus& status)
+{
+    const auto json_bool = [](bool value) {
+        return value ? "true" : "false";
+    };
+
+    std::string payload;
+    payload.reserve(384 + status.last_error.size());
+    payload += "{\"enabled\":true,\"mount_point\":\"";
+    payload += JsonEscape(status.mount_point);
+    payload += "\",";
+    payload += "\"mount_attempted\":";
+    payload += json_bool(status.mount_attempted);
+    payload += ",\"mounted\":";
+    payload += json_bool(status.mounted);
+    payload += ",\"writable\":";
+    payload += json_bool(status.writable);
+    payload += ",\"self_test_passed\":";
+    payload += json_bool(status.self_test_passed);
+    payload += ",\"total_bytes\":";
+    payload += std::to_string(status.total_bytes);
+    payload += ",\"free_bytes\":";
+    payload += std::to_string(status.free_bytes);
+    payload += ",\"note_count\":";
+    payload += std::to_string(status.note_count);
+    payload += ",\"diagnostic_count\":";
+    payload += std::to_string(status.diagnostic_count);
+    payload += ",\"reader_checkpoint_present\":";
+    payload += json_bool(status.reader_checkpoint_present);
+    payload += ",\"last_error\":\"";
+    payload += JsonEscape(status.last_error);
+    payload += "\"}";
+    return payload;
+}
+
 }  // namespace davie::tf
