@@ -447,7 +447,7 @@ index 99db546..7db3016 100644
 \ No newline at end of file
 +#endif
 diff --git a/main/audio/wake_words/custom_wake_word.cc b/main/audio/wake_words/custom_wake_word.cc
-index 982bbe9..becaa90 100644
+index 982bbe9..fc02af7 100644
 --- a/main/audio/wake_words/custom_wake_word.cc
 +++ b/main/audio/wake_words/custom_wake_word.cc
 @@ -4,18 +4,35 @@
@@ -510,7 +510,7 @@ index 982bbe9..becaa90 100644
          }
          if (cJSON_IsArray(commands)) {
              for (int i = 0; i < cJSON_GetArraySize(commands); i++) {
-@@ -120,11 +147,107 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list)
+@@ -120,11 +147,109 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list)
      multinet_->set_det_threshold(multinet_model_data_, threshold_);
      esp_mn_commands_clear();
      for (int i = 0; i < commands_.size(); i++) {
@@ -559,13 +559,15 @@ index 982bbe9..becaa90 100644
 +    afe_config->wakenet_model_name_2 = nullptr;
 +    afe_config->aec_init = codec_->input_reference();
 +    afe_config->aec_mode = AEC_MODE_SR_HIGH_PERF;
-+    afe_config->vad_mode = VAD_MODE_0;
++    // Mode 2 is less likely than Mode 0 to classify steady room noise as a
++    // speech segment, while still keeping ordinary near-field speech.
++    afe_config->vad_mode = VAD_MODE_2;
 +    afe_config->vad_min_speech_ms = 96;
 +    afe_config->vad_min_noise_ms = 256;
 +    afe_config->vad_delay_ms = 160;
 +    afe_config->afe_perferred_core = 1;
-+    // The AFE producer must outrank the MultiNet consumer. Reversing these
-+    // priorities lets a backlogged inference loop starve AFE and fill its ring.
++    // Keep AFE isolated on core 1. MultiNet runs on core 0 so its model
++    // inference cannot block the AFE producer/fetch path.
 +    afe_config->afe_perferred_priority = 3;
 +    afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
 +    afe_config = afe_config_check(afe_config);
@@ -609,9 +611,9 @@ index 982bbe9..becaa90 100644
 +        "custom_wake_afe",
 +        4096 * 2,
 +        this,
-+        2,
++        4,
 +        &audio_detection_task_,
-+        1);
++        0);
 +    if (task_result != pdPASS) {
 +        ESP_LOGE(TAG, "Failed to create custom wake detection task");
 +        return false;
@@ -619,7 +621,7 @@ index 982bbe9..becaa90 100644
      return true;
  }
  
-@@ -133,77 +256,236 @@ void CustomWakeWord::OnWakeWordDetected(std::function<void(const std::string& wa
+@@ -133,77 +258,232 @@ void CustomWakeWord::OnWakeWordDetected(std::function<void(const std::string& wa
  }
  
  void CustomWakeWord::Start() {
@@ -853,10 +855,6 @@ index 982bbe9..becaa90 100644
 +                    break;
                  }
 +
-+                // MultiNet5 is bounded well below its 32 ms frame budget, but
-+                // a real delay is still required so IDLE and AFE housekeeping
-+                // can run even while input briefly arrives faster than output.
-+                vTaskDelay(1);
 +            }
 +
 +            if (decision.reset_model) {

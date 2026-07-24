@@ -397,3 +397,9 @@ handoff:
 - 修复方向: 保留 `SR_HIGH_PERF` AEC；AFE 任务升至优先级 3，MultiNet 固定 CPU1/优先级 2；新增 VAD-gated bounded inference、VAD cache 首音节补偿、3.2 秒单段上限、超时后等静音恢复，以及每帧真实调度让步。当前 MR/SR pipeline 的实际 NS 为关闭，attestation 已改为如实报告，避免把 Kconfig 可用误报成运行中。
 - 自动验证: 新增 wake inference gate 主机测试，当前固件 host tests `4/4 passed`；未提交修复的 ESP-IDF 增量构建成功，app `0x447000`、13% free；官方 v2.2.4 补丁可在全新 clone 上通过 `git apply --check` 并重建相同 vendor tree。
 - 下一门禁: 提交修复后从该提交做 fullclean 单进程构建，仅刷 app partition，再以串口证明无 ring-full/WDT/panic/reboot，随后才进行合成 canary 和真人近场验收。
+
+### 【修复中】Codex 2026-07-24 18:39 Asia/Singapore — P1 dual-core wake scheduling (TTL 8h)
+- 二次真机失败证据: 提交 `d13dc4dea80d` 的 app-only 镜像成功启动并恢复 TF、摄像头、触控、Wi-Fi 与音频，但 MultiNet 实测平均 `66.1-68.4 ms`、峰值 `141.2 ms`，超过 32 ms 帧预算；AFE ringbuffer 仍持续溢出。该镜像没有被判定为通过，也没有请求真人验收。
+- 根因修正: 前一版虽调整优先级，却仍把 AFE 内部任务和同步 MultiNet 推理固定在 CPU1，优先级不能消除同核串行计算。官方基准显示 MultiNet5 Q8 应约 12 ms/32 ms，因此先验证任务隔离而非降低 AEC 质量或盲目调低检测阈值。
+- 当前修复: AFE 保持 CPU1、SR high-performance AEC；MultiNet 迁移到 CPU0、优先级 4，仍低于 CPU0 的实时音频采集优先级 8；移除每帧额外 10 ms delay；WebRTC VAD 从 mode 0 调到 mode 2，减少稳定环境噪声形成长识别段。
+- 自动验证: 固件 host tests `4/4 passed`；ESP-IDF 增量 build 成功，app `0x447000`、13% free。下一步必须从新提交重建、app-only 刷写并以串口比较 ring-full 数量和真实 MultiNet 平均/峰值，未通过则继续留在 P1。
