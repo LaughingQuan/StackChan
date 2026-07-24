@@ -1,61 +1,5 @@
-diff --git a/main/audio/wake_words/custom_wake_word.cc b/main/audio/wake_words/custom_wake_word.cc
-index 982bbe9..3de687b 100644
---- a/main/audio/wake_words/custom_wake_word.cc
-+++ b/main/audio/wake_words/custom_wake_word.cc
-@@ -9,6 +9,11 @@
- #include <esp_mn_speech_commands.h>
- #include <cJSON.h>
--
-+#include <algorithm>
-+
-+extern "C" {
-+#include <flite_g2p.h>
-+}
-+
- #define TAG "CustomWakeWord"
- 
- CustomWakeWord::CustomWakeWord()
-@@ -62,6 +67,13 @@ void CustomWakeWord::ParseWakenetModelConfig() {
-         }
-         if (cJSON_IsNumber(threshold)) {
-             threshold_ = threshold->valuedouble;
-+            // Assets produced before this fix stored the Kconfig percentage
-+            // (for example 8) instead of MultiNet's normalized value (0.08).
-+            if (threshold_ > 1.0f) {
-+                threshold_ /= 100.0f;
-+            }
-+            threshold_ = std::clamp(threshold_, 0.01f, 0.99f);
-+            ESP_LOGI(TAG, "Using normalized detection threshold: %.2f", threshold_);
-         }
-         if (cJSON_IsArray(commands)) {
-             for (int i = 0; i < cJSON_GetArraySize(commands); i++) {
-@@ -120,7 +132,23 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list)
-     multinet_->set_det_threshold(multinet_model_data_, threshold_);
-     esp_mn_commands_clear();
-     for (int i = 0; i < commands_.size(); i++) {
--        esp_mn_commands_add(i + 1, commands_[i].command.c_str());
-+        esp_err_t command_result = ESP_OK;
-+#if (defined(CONFIG_SR_MN_EN_MULTINET5_SINGLE_RECOGNITION_QUANT8) && CONFIG_SR_MN_EN_MULTINET5_SINGLE_RECOGNITION_QUANT8) || \
-+    (defined(CONFIG_SR_MN_EN_MULTINET7_QUANT) && CONFIG_SR_MN_EN_MULTINET7_QUANT)
-+        char* phonemes = flite_g2p(commands_[i].command.c_str(), 1);
-+        if (phonemes == nullptr) {
-+            ESP_LOGE(TAG, "Failed to generate phonemes for command: %s", commands_[i].command.c_str());
-+            continue;
-+        }
-+        ESP_LOGI(TAG, "Command phonemes: %s -> %s", commands_[i].command.c_str(), phonemes);
-+        command_result = esp_mn_commands_phoneme_add(i + 1, commands_[i].command.c_str(), phonemes);
-+        free(phonemes);
-+#else
-+        command_result = esp_mn_commands_add(i + 1, commands_[i].command.c_str());
-+#endif
-+        if (command_result != ESP_OK) {
-+            ESP_LOGE(TAG, "Failed to register command: %s", commands_[i].command.c_str());
-+        }
-     }
-     esp_mn_commands_update();
-     
 diff --git a/main/application.cc b/main/application.cc
-index d69d43d..3b6f07e 100644
+index d69d43d..fce3698 100644
 --- a/main/application.cc
 +++ b/main/application.cc
 @@ -610,33 +610,36 @@ void Application::InitializeProtocol() {
@@ -122,7 +66,9 @@ index d69d43d..3b6f07e 100644
  }
  
  void Application::Alert(const char* status, const char* message, const char* emotion, const std::string_view& sound) {
-@@ -895,5 +898,6 @@ void Application::HandleStateChangedEvent() {
+@@ -893,7 +896,8 @@ void Application::HandleStateChangedEvent() {
+             }
+ 
  #ifdef CONFIG_WAKE_WORD_DETECTION_IN_LISTENING
 -            // Enable wake word detection in listening mode (configured via Kconfig)
 +            // Custom MultiNet and AFE voice processing share the audio task.
@@ -130,6 +76,11 @@ index d69d43d..3b6f07e 100644
              audio_service_.EnableWakeWordDetection(audio_service_.IsAfeWakeWord());
  #else
              // Disable wake word detection in listening mode
+@@ -1116,4 +1120,3 @@ void Application::ResetProtocol() {
+         protocol_.reset();
+     });
+ }
+-
 diff --git a/main/assets.cc b/main/assets.cc
 index ad61944..6b84daf 100644
 --- a/main/assets.cc
@@ -309,6 +260,607 @@ index 3692e0c..7bfbc5c 100644
      
      // Strategy instance
      std::unique_ptr<AssetStrategy> strategy_;
+diff --git a/main/audio/audio_service.cc b/main/audio/audio_service.cc
+index 350ac58..3a696fd 100644
+--- a/main/audio/audio_service.cc
++++ b/main/audio/audio_service.cc
+@@ -124,7 +124,13 @@ void AudioService::Initialize(AudioCodec* codec) {
+ 
+ void AudioService::Start() {
+     service_stopped_ = false;
+-    xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING | AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING);
++    post_wake_audio_bridge_.Cancel();
++    xEventGroupClearBits(
++        event_group_,
++        AS_EVENT_AUDIO_TESTING_RUNNING |
++            AS_EVENT_WAKE_WORD_RUNNING |
++            AS_EVENT_AUDIO_PROCESSOR_RUNNING |
++            AS_EVENT_POST_WAKE_CAPTURE_RUNNING);
+ 
+     esp_timer_start_periodic(audio_power_timer_, 1000000);
+ 
+@@ -169,9 +175,11 @@ void AudioService::Start() {
+ void AudioService::Stop() {
+     esp_timer_stop(audio_power_timer_);
+     service_stopped_ = true;
++    post_wake_audio_bridge_.Cancel();
+     xEventGroupSetBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
+         AS_EVENT_WAKE_WORD_RUNNING |
+-        AS_EVENT_AUDIO_PROCESSOR_RUNNING);
++        AS_EVENT_AUDIO_PROCESSOR_RUNNING |
++        AS_EVENT_POST_WAKE_CAPTURE_RUNNING);
+ 
+     std::lock_guard<std::mutex> lock(audio_queue_mutex_);
+     audio_encode_queue_.clear();
+@@ -230,16 +238,37 @@ bool AudioService::ReadAudioData(std::vector<int16_t>& data, int sample_rate, in
+ void AudioService::AudioInputTask() {
+     while (true) {
+         EventBits_t bits = xEventGroupWaitBits(event_group_, AS_EVENT_AUDIO_TESTING_RUNNING |
+-            AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING,
++            AS_EVENT_WAKE_WORD_RUNNING |
++            AS_EVENT_AUDIO_PROCESSOR_RUNNING |
++            AS_EVENT_POST_WAKE_CAPTURE_RUNNING,
+             pdFALSE, pdFALSE, portMAX_DELAY);
+ 
+         if (service_stopped_) {
+             break;
+         }
+-        if (audio_input_need_warmup_) {
+-            audio_input_need_warmup_ = false;
+-            vTaskDelay(pdMS_TO_TICKS(120));
+-            continue;
++
++        if ((bits & AS_EVENT_AUDIO_PROCESSOR_RUNNING) &&
++            post_wake_audio_bridge_.IsActive()) {
++            const size_t buffered_ms =
++                post_wake_audio_bridge_.BufferedMilliseconds();
++            auto bridged_audio = post_wake_audio_bridge_.Take();
++            xEventGroupClearBits(
++                event_group_,
++                AS_EVENT_POST_WAKE_CAPTURE_RUNNING);
++            if (!bridged_audio.empty()) {
++                ESP_LOGI(
++                    TAG,
++                    "Replaying %u ms of post-wake audio into the conversation AFE",
++                    static_cast<unsigned>(buffered_ms));
++                audio_processor_->Feed(std::move(bridged_audio));
++            }
++            bits = xEventGroupGetBits(event_group_);
++        } else if ((bits & AS_EVENT_POST_WAKE_CAPTURE_RUNNING) &&
++                   !post_wake_audio_bridge_.IsActive()) {
++            xEventGroupClearBits(
++                event_group_,
++                AS_EVENT_POST_WAKE_CAPTURE_RUNNING);
++            bits = xEventGroupGetBits(event_group_);
+         }
+ 
+         /* Used for audio testing in NetworkConfiguring mode by clicking the BOOT button */
+@@ -266,10 +295,22 @@ void AudioService::AudioInputTask() {
+         }
+ 
+         /* Feed the wake word and/or audio processor */
+-        if (bits & (AS_EVENT_WAKE_WORD_RUNNING | AS_EVENT_AUDIO_PROCESSOR_RUNNING)) {
++        if (bits & (AS_EVENT_WAKE_WORD_RUNNING |
++                    AS_EVENT_AUDIO_PROCESSOR_RUNNING |
++                    AS_EVENT_POST_WAKE_CAPTURE_RUNNING)) {
+             int samples = 160; // 10ms
+             std::vector<int16_t> data;
+             if (ReadAudioData(data, 16000, samples)) {
++                if (bits & AS_EVENT_POST_WAKE_CAPTURE_RUNNING) {
++                    if (!post_wake_audio_bridge_.Append(data)) {
++                        ESP_LOGW(
++                            TAG,
++                            "Post-wake audio bridge expired before conversation audio became ready");
++                        xEventGroupClearBits(
++                            event_group_,
++                            AS_EVENT_POST_WAKE_CAPTURE_RUNNING);
++                    }
++                }
+                 if (bits & AS_EVENT_WAKE_WORD_RUNNING) {
+                     wake_word_->Feed(data);
+                 }
+@@ -553,6 +594,10 @@ void AudioService::EnableWakeWordDetection(bool enable) {
+ 
+     ESP_LOGD(TAG, "%s wake word detection", enable ? "Enabling" : "Disabling");
+     if (enable) {
++        post_wake_audio_bridge_.Cancel();
++        xEventGroupClearBits(
++            event_group_,
++            AS_EVENT_POST_WAKE_CAPTURE_RUNNING);
+         if (!wake_word_initialized_) {
+             if (!wake_word_->Initialize(codec_, models_list_)) {
+                 ESP_LOGE(TAG, "Failed to initialize wake word");
+@@ -586,7 +631,6 @@ void AudioService::EnableVoiceProcessing(bool enable) {
+ 
+         /* We should make sure no audio is playing */
+         ResetDecoder();
+-        audio_input_need_warmup_ = true;
+         // Reset input resampler to clear cached data from previous mode (e.g. WakeWord)
+         // This prevents buffer overflow when switching between different feed sizes
+         {
+@@ -600,6 +644,12 @@ void AudioService::EnableVoiceProcessing(bool enable) {
+     } else {
+         audio_processor_->Stop();
+         xEventGroupClearBits(event_group_, AS_EVENT_AUDIO_PROCESSOR_RUNNING);
++        if (post_wake_audio_bridge_.IsActive()) {
++            post_wake_audio_bridge_.Cancel();
++            xEventGroupClearBits(
++                event_group_,
++                AS_EVENT_POST_WAKE_CAPTURE_RUNNING);
++        }
+     }
+ }
+ 
+@@ -718,6 +768,18 @@ void AudioService::SetModelsList(srmodel_list_t* models_list) {
+ 
+     if (wake_word_) {
+         wake_word_->OnWakeWordDetected([this](const std::string& wake_word) {
++            post_wake_audio_bridge_.Begin(codec_->input_channels());
++            xEventGroupSetBits(
++                event_group_,
++                AS_EVENT_POST_WAKE_CAPTURE_RUNNING);
++            ESP_LOGI(
++                TAG,
++                "Started bounded post-wake audio bridge: pre-roll=%u ms max_capture=%u ms channels=%d",
++                static_cast<unsigned>(
++                    post_wake_audio_bridge_.PreRollMilliseconds()),
++                static_cast<unsigned>(
++                    post_wake_audio_bridge_.MaxCaptureMilliseconds()),
++                codec_->input_channels());
+             if (callbacks_.on_wake_word_detected) {
+                 callbacks_.on_wake_word_detected(wake_word);
+             }
+diff --git a/main/audio/audio_service.h b/main/audio/audio_service.h
+index 99db546..7db3016 100644
+--- a/main/audio/audio_service.h
++++ b/main/audio/audio_service.h
+@@ -19,6 +19,7 @@
+ #include "esp_audio_types.h"
+ 
+ #include "audio_codec.h"
++#include "audio/davie_post_wake_audio_bridge.h"
+ #include "audio_processor.h"
+ #include "processors/audio_debugger.h"
+ #include "wake_word.h"
+@@ -51,6 +52,7 @@
+ #define AS_EVENT_WAKE_WORD_RUNNING          (1 << 1)
+ #define AS_EVENT_AUDIO_PROCESSOR_RUNNING    (1 << 2)
+ #define AS_EVENT_PLAYBACK_NOT_EMPTY         (1 << 3)
++#define AS_EVENT_POST_WAKE_CAPTURE_RUNNING  (1 << 4)
+ 
+ #define AS_OPUS_GET_FRAME_DRU_ENUM(duration_ms)                   \
+     ((duration_ms) == 5 ? ESP_OPUS_ENC_FRAME_DURATION_5_MS :      \
+@@ -178,7 +180,7 @@ private:
+     bool audio_processor_initialized_ = false;
+     bool voice_detected_ = false;
+     bool service_stopped_ = true;
+-    bool audio_input_need_warmup_ = false;
++    davie::audio::PostWakeAudioBridge post_wake_audio_bridge_;
+ 
+     esp_timer_handle_t audio_power_timer_ = nullptr;
+     std::chrono::steady_clock::time_point last_input_time_;
+@@ -192,4 +194,4 @@ private:
+     void CheckAndUpdateAudioPowerState();
+ };
+ 
+-#endif
+\ No newline at end of file
++#endif
+diff --git a/main/audio/wake_words/custom_wake_word.cc b/main/audio/wake_words/custom_wake_word.cc
+index 982bbe9..9ec28e5 100644
+--- a/main/audio/wake_words/custom_wake_word.cc
++++ b/main/audio/wake_words/custom_wake_word.cc
+@@ -8,14 +8,30 @@
+ #include <esp_mn_models.h>
+ #include <esp_mn_speech_commands.h>
+ #include <cJSON.h>
++#include <algorithm>
++#include <sstream>
++
++extern "C" {
++#include <flite_g2p.h>
++}
+ 
+ #define TAG "CustomWakeWord"
++#define DETECTION_RUNNING_EVENT 1
+ 
+ CustomWakeWord::CustomWakeWord()
+     : wake_word_pcm_(), wake_word_opus_() {
++    event_group_ = xEventGroupCreate();
+ }
+ 
+ CustomWakeWord::~CustomWakeWord() {
++    running_ = false;
++    if (event_group_ != nullptr) {
++        xEventGroupClearBits(event_group_, DETECTION_RUNNING_EVENT);
++    }
++    if (afe_data_ != nullptr && afe_iface_ != nullptr) {
++        afe_iface_->destroy(afe_data_);
++        afe_data_ = nullptr;
++    }
+     if (multinet_model_data_ != nullptr && multinet_ != nullptr) {
+         multinet_->destroy(multinet_model_data_);
+         multinet_model_data_ = nullptr;
+@@ -32,6 +48,9 @@ CustomWakeWord::~CustomWakeWord() {
+     if (models_ != nullptr) {
+         esp_srmodel_deinit(models_);
+     }
++    if (event_group_ != nullptr) {
++        vEventGroupDelete(event_group_);
++    }
+ }
+ 
+ void CustomWakeWord::ParseWakenetModelConfig() {
+@@ -62,6 +81,13 @@ void CustomWakeWord::ParseWakenetModelConfig() {
+         }
+         if (cJSON_IsNumber(threshold)) {
+             threshold_ = threshold->valuedouble;
++            // Assets produced before this fix stored the Kconfig percentage
++            // (for example 8) instead of MultiNet's normalized value (0.08).
++            if (threshold_ > 1.0f) {
++                threshold_ /= 100.0f;
++            }
++            threshold_ = std::clamp(threshold_, 0.01f, 0.99f);
++            ESP_LOGI(TAG, "Using normalized detection threshold: %.2f", threshold_);
+         }
+         if (cJSON_IsArray(commands)) {
+             for (int i = 0; i < cJSON_GetArraySize(commands); i++) {
+@@ -120,11 +146,88 @@ bool CustomWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list)
+     multinet_->set_det_threshold(multinet_model_data_, threshold_);
+     esp_mn_commands_clear();
+     for (int i = 0; i < commands_.size(); i++) {
+-        esp_mn_commands_add(i + 1, commands_[i].command.c_str());
++        esp_err_t command_result = ESP_OK;
++#if (defined(CONFIG_SR_MN_EN_MULTINET5_SINGLE_RECOGNITION_QUANT8) && CONFIG_SR_MN_EN_MULTINET5_SINGLE_RECOGNITION_QUANT8) || \
++    (defined(CONFIG_SR_MN_EN_MULTINET7_QUANT) && CONFIG_SR_MN_EN_MULTINET7_QUANT)
++        char* phonemes = flite_g2p(commands_[i].command.c_str(), 1);
++        if (phonemes == nullptr) {
++            ESP_LOGE(TAG, "Failed to generate phonemes for command: %s", commands_[i].command.c_str());
++            continue;
++        }
++        ESP_LOGI(TAG, "Command phonemes: %s -> %s", commands_[i].command.c_str(), phonemes);
++        command_result = esp_mn_commands_phoneme_add(i + 1, commands_[i].command.c_str(), phonemes);
++        free(phonemes);
++#else
++        command_result = esp_mn_commands_add(i + 1, commands_[i].command.c_str());
++#endif
++        if (command_result != ESP_OK) {
++            ESP_LOGE(TAG, "Failed to register command: %s", commands_[i].command.c_str());
++        }
+     }
+     esp_mn_commands_update();
+     
+     multinet_->print_active_speech_commands(multinet_model_data_);
++
++    int ref_num = codec_->input_reference() ? 1 : 0;
++    std::string input_format;
++    for (int i = 0; i < codec_->input_channels() - ref_num; i++) {
++        input_format.push_back('M');
++    }
++    for (int i = 0; i < ref_num; i++) {
++        input_format.push_back('R');
++    }
++
++    afe_config_t* afe_config =
++        afe_config_init(input_format.c_str(), models_, AFE_TYPE_SR, AFE_MODE_HIGH_PERF);
++    if (afe_config == nullptr) {
++        ESP_LOGE(TAG, "Failed to create custom wake AFE configuration");
++        return false;
++    }
++    // MultiNet is the only wake engine in this path. Disable the unrelated
++    // WakeNet model while retaining AEC/NS and the microphone/reference map.
++    afe_config->wakenet_init = false;
++    afe_config->wakenet_model_name = nullptr;
++    afe_config->wakenet_model_name_2 = nullptr;
++    afe_config->aec_init = codec_->input_reference();
++    afe_config->aec_mode = AEC_MODE_SR_HIGH_PERF;
++    afe_config->afe_perferred_core = 1;
++    afe_config->afe_perferred_priority = 1;
++    afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
++    afe_config = afe_config_check(afe_config);
++    ESP_LOGI(
++        TAG,
++        "Custom wake front end: AFE_TYPE_SR format=%s aec=%d ns=%d vad=%d agc=%d",
++        input_format.c_str(),
++        afe_config->aec_init,
++        afe_config->ns_init,
++        afe_config->vad_init,
++        afe_config->agc_init);
++
++    afe_iface_ = esp_afe_handle_from_config(afe_config);
++    if (afe_iface_ != nullptr) {
++        afe_data_ = afe_iface_->create_from_config(afe_config);
++    }
++    afe_config_free(afe_config);
++    if (afe_iface_ == nullptr || afe_data_ == nullptr) {
++        ESP_LOGE(TAG, "Failed to initialize custom wake AFE");
++        return false;
++    }
++
++    BaseType_t task_result = xTaskCreate(
++        [](void* arg) {
++            auto* self = static_cast<CustomWakeWord*>(arg);
++            self->AudioDetectionTask();
++            vTaskDelete(nullptr);
++        },
++        "custom_wake_afe",
++        4096 * 2,
++        this,
++        3,
++        &audio_detection_task_);
++    if (task_result != pdPASS) {
++        ESP_LOGE(TAG, "Failed to create custom wake detection task");
++        return false;
++    }
+     return true;
+ }
+ 
+@@ -133,77 +236,167 @@ void CustomWakeWord::OnWakeWordDetected(std::function<void(const std::string& wa
+ }
+ 
+ void CustomWakeWord::Start() {
++    {
++        std::lock_guard<std::mutex> lock(afe_feed_mutex_);
++        afe_feed_buffer_.clear();
++        if (afe_data_ != nullptr) {
++            afe_iface_->reset_buffer(afe_data_);
++        }
++    }
++    {
++        std::lock_guard<std::mutex> lock(multinet_mutex_);
++        multinet_input_buffer_.clear();
++        if (multinet_model_data_ != nullptr) {
++            multinet_->clean(multinet_model_data_);
++        }
++    }
+     running_ = true;
++    xEventGroupSetBits(event_group_, DETECTION_RUNNING_EVENT);
+ }
+ 
+ void CustomWakeWord::Stop() {
+     running_ = false;
+-
+-    std::lock_guard<std::mutex> lock(input_buffer_mutex_);
+-    input_buffer_.clear();
++    xEventGroupClearBits(event_group_, DETECTION_RUNNING_EVENT);
++    {
++        std::lock_guard<std::mutex> lock(afe_feed_mutex_);
++        if (afe_data_ != nullptr) {
++            afe_iface_->reset_buffer(afe_data_);
++        }
++        afe_feed_buffer_.clear();
++    }
++    {
++        std::lock_guard<std::mutex> lock(multinet_mutex_);
++        multinet_input_buffer_.clear();
++        if (multinet_model_data_ != nullptr) {
++            multinet_->clean(multinet_model_data_);
++        }
++    }
+ }
+ 
+ void CustomWakeWord::Feed(const std::vector<int16_t>& data) {
+-    if (multinet_model_data_ == nullptr) {
++    if (afe_data_ == nullptr || multinet_model_data_ == nullptr) {
+         return;
+     }
+ 
+-    std::lock_guard<std::mutex> lock(input_buffer_mutex_);
++    std::lock_guard<std::mutex> lock(afe_feed_mutex_);
+     // Check running state inside lock to avoid TOCTOU race with Stop()
+     if (!running_) {
+         return;
+     }
+ 
+-    // If input channels is 2, we need to fetch the left channel data
+-    if (codec_->input_channels() == 2) {
+-        for (size_t i = 0; i < data.size(); i += 2) {
+-            input_buffer_.push_back(data[i]);
+-        }
+-    } else {
+-        input_buffer_.insert(input_buffer_.end(), data.begin(), data.end());
++    afe_feed_buffer_.insert(afe_feed_buffer_.end(), data.begin(), data.end());
++    const size_t chunk_size =
++        afe_iface_->get_feed_chunksize(afe_data_) * codec_->input_channels();
++    while (afe_feed_buffer_.size() >= chunk_size) {
++        afe_iface_->feed(afe_data_, afe_feed_buffer_.data());
++        afe_feed_buffer_.erase(
++            afe_feed_buffer_.begin(),
++            afe_feed_buffer_.begin() + chunk_size);
+     }
+-    
+-    int chunksize = multinet_->get_samp_chunksize(multinet_model_data_);
+-    while (input_buffer_.size() >= chunksize) {
+-        std::vector<int16_t> chunk(input_buffer_.begin(), input_buffer_.begin() + chunksize);
+-        StoreWakeWordData(chunk);
+-        
+-        esp_mn_state_t mn_state = multinet_->detect(multinet_model_data_, chunk.data());
+-        
+-        if (mn_state == ESP_MN_STATE_DETECTED) {
+-            esp_mn_results_t *mn_result = multinet_->get_results(multinet_model_data_);
+-            for (int i = 0; i < mn_result->num && running_; i++) {
+-                ESP_LOGI(TAG, "Custom wake word detected: command_id=%d, string=%s, prob=%f", 
+-                        mn_result->command_id[i], mn_result->string, mn_result->prob[i]);
+-                auto& command = commands_[mn_result->command_id[i] - 1];
+-                if (command.action == "wake") {
+-                    last_detected_wake_word_ = command.text;
+-                    running_ = false;
+-                    input_buffer_.clear();
+-                    
+-                    if (wake_word_detected_callback_) {
+-                        wake_word_detected_callback_(last_detected_wake_word_);
++}
++
++size_t CustomWakeWord::GetFeedSize() {
++    if (afe_data_ == nullptr) {
++        return 0;
++    }
++    return afe_iface_->get_feed_chunksize(afe_data_);
++}
++
++void CustomWakeWord::AudioDetectionTask() {
++    const size_t multinet_chunk_size =
++        multinet_->get_samp_chunksize(multinet_model_data_);
++    ESP_LOGI(
++        TAG,
++        "Custom wake AFE task started, feed=%d fetch=%d multinet=%d",
++        afe_iface_->get_feed_chunksize(afe_data_),
++        afe_iface_->get_fetch_chunksize(afe_data_),
++        static_cast<int>(multinet_chunk_size));
++
++    while (true) {
++        xEventGroupWaitBits(
++            event_group_,
++            DETECTION_RUNNING_EVENT,
++            pdFALSE,
++            pdTRUE,
++            portMAX_DELAY);
++
++        auto* result = afe_iface_->fetch_with_delay(afe_data_, portMAX_DELAY);
++        if (!running_) {
++            continue;
++        }
++        if (result == nullptr || result->ret_value == ESP_FAIL) {
++            continue;
++        }
++
++        const size_t samples = result->data_size / sizeof(int16_t);
++        StoreWakeWordData(std::vector<int16_t>(result->data, result->data + samples));
++
++        std::string detected_wake_word;
++        {
++            std::lock_guard<std::mutex> lock(multinet_mutex_);
++            if (!running_) {
++                continue;
++            }
++            multinet_input_buffer_.insert(
++                multinet_input_buffer_.end(),
++                result->data,
++                result->data + samples);
++
++            while (multinet_input_buffer_.size() >= multinet_chunk_size && running_) {
++                esp_mn_state_t state =
++                    multinet_->detect(multinet_model_data_, multinet_input_buffer_.data());
++                multinet_input_buffer_.erase(
++                    multinet_input_buffer_.begin(),
++                    multinet_input_buffer_.begin() + multinet_chunk_size);
++
++                if (state == ESP_MN_STATE_DETECTED) {
++                    esp_mn_results_t* mn_result =
++                        multinet_->get_results(multinet_model_data_);
++                    for (int index = 0; index < mn_result->num && running_; ++index) {
++                        const int command_id = mn_result->command_id[index];
++                        ESP_LOGI(
++                            TAG,
++                            "Custom wake word detected: command_id=%d string=%s prob=%f",
++                            command_id,
++                            mn_result->string,
++                            mn_result->prob[index]);
++                        if (command_id <= 0 ||
++                            command_id > static_cast<int>(commands_.size())) {
++                            ESP_LOGW(TAG, "Ignoring invalid custom wake command id: %d", command_id);
++                            continue;
++                        }
++                        auto& command = commands_[command_id - 1];
++                        if (command.action == "wake") {
++                            detected_wake_word = command.text;
++                            last_detected_wake_word_ = detected_wake_word;
++                            running_ = false;
++                            xEventGroupClearBits(
++                                event_group_,
++                                DETECTION_RUNNING_EVENT);
++                        }
+                     }
++                    multinet_->clean(multinet_model_data_);
++                } else if (state == ESP_MN_STATE_TIMEOUT) {
++                    ESP_LOGD(TAG, "Command word detection timeout, cleaning state");
++                    multinet_->clean(multinet_model_data_);
+                 }
+             }
+-            multinet_->clean(multinet_model_data_);
+-        } else if (mn_state == ESP_MN_STATE_TIMEOUT) {
+-            ESP_LOGD(TAG, "Command word detection timeout, cleaning state");
+-            multinet_->clean(multinet_model_data_);
+-        }
+-        
+-        if (!running_) {
+-            break;
++            if (!running_) {
++                multinet_input_buffer_.clear();
++            }
+         }
+-        input_buffer_.erase(input_buffer_.begin(), input_buffer_.begin() + chunksize);
+-    }
+-}
+ 
+-size_t CustomWakeWord::GetFeedSize() {
+-    if (multinet_model_data_ == nullptr) {
+-        return 0;
++        if (!detected_wake_word.empty()) {
++            {
++                std::lock_guard<std::mutex> lock(afe_feed_mutex_);
++                afe_feed_buffer_.clear();
++                afe_iface_->reset_buffer(afe_data_);
++            }
++            if (wake_word_detected_callback_) {
++                wake_word_detected_callback_(detected_wake_word);
++            }
++        }
+     }
+-    return multinet_->get_samp_chunksize(multinet_model_data_);
+ }
+ 
+ void CustomWakeWord::StoreWakeWordData(const std::vector<int16_t>& data) {
+diff --git a/main/audio/wake_words/custom_wake_word.h b/main/audio/wake_words/custom_wake_word.h
+index 645ad1b..5877eb4 100644
+--- a/main/audio/wake_words/custom_wake_word.h
++++ b/main/audio/wake_words/custom_wake_word.h
+@@ -2,9 +2,13 @@
+ #define CUSTOM_WAKE_WORD_H
+ 
+ #include <esp_attr.h>
++#include <esp_afe_sr_models.h>
+ #include <esp_mn_iface.h>
+ #include <esp_mn_models.h>
+ #include <model_path.h>
++#include <freertos/FreeRTOS.h>
++#include <freertos/event_groups.h>
++#include <freertos/task.h>
+ 
+ #include <deque>
+ #include <string>
+@@ -42,6 +46,8 @@ private:
+     // multinet 相关成员变量
+     esp_mn_iface_t* multinet_ = nullptr;
+     model_iface_data_t* multinet_model_data_ = nullptr;
++    const esp_afe_sr_iface_t* afe_iface_ = nullptr;
++    esp_afe_sr_data_t* afe_data_ = nullptr;
+     srmodel_list_t *models_ = nullptr;
+     char* mn_name_ = nullptr;
+     std::string language_ = "cn";
+@@ -53,8 +59,12 @@ private:
+     AudioCodec* codec_ = nullptr;
+     std::string last_detected_wake_word_;
+     std::atomic<bool> running_ = false;
+-    std::vector<int16_t> input_buffer_;
+-    std::mutex input_buffer_mutex_;
++    EventGroupHandle_t event_group_ = nullptr;
++    std::vector<int16_t> afe_feed_buffer_;
++    std::vector<int16_t> multinet_input_buffer_;
++    std::mutex afe_feed_mutex_;
++    std::mutex multinet_mutex_;
++    TaskHandle_t audio_detection_task_ = nullptr;
+ 
+     TaskHandle_t wake_word_encode_task_ = nullptr;
+     StaticTask_t* wake_word_encode_task_buffer_ = nullptr;
+@@ -66,6 +76,7 @@ private:
+ 
+     void StoreWakeWordData(const std::vector<int16_t>& data);
+     void ParseWakenetModelConfig();
++    void AudioDetectionTask();
+ };
+ 
+ #endif
 diff --git a/main/boards/common/i2c_device.cc b/main/boards/common/i2c_device.cc
 index 835997d..ea50d51 100644
 --- a/main/boards/common/i2c_device.cc

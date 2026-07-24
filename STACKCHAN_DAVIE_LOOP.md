@@ -373,3 +373,20 @@ handoff:
 - 自动验证: Gateway 81 passed；固件 host 2/2；ESP-IDF `fullclean` 后单进程完整 build 成功，app `0x4459c0`、13% free；Davie Platform 196 passed，structure/contracts/AsyncAPI/Ruff/compile/wheel/restart smoke 全部通过。生产 Stack gateway active、`NRestarts=0`、无新 traceback/exception。
 - 证据: `/mnt/nas-backups/Hermes/diagnostics/stackchan-p0/20260724` 保存重连、耐久、最终 attestation 与受保护诊断，4 个 JSON 的 SHA256 清单逐一通过。
 - 边界: ¥0；没有调用模型、云端或付费 API；没有修改或重启 Davie Gateway/executor/proactivity；没有格式化 TF。自动硬复位不冒充 20 次真人拔电，合成音频第 6 次命中不冒充真人唤醒率；P1 必须修复 raw-channel wake path 并通过真人声学门。
+
+### 【完成】Codex 2026-07-24 17:47 Asia/Singapore — Desktop Robot P1 wake front end and pre-roll implementation
+- 正在改: `firmware/xiaozhi-esp32/main/audio/**`, related firmware host tests/configuration, P1 evidence report, and this ledger.
+- 目标: feed the custom `Davie` wake detector with the best available AFE-processed microphone signal, preserve bounded pre-roll so speech immediately after wake does not lose its first word, and keep touch-to-talk as a deterministic fallback.
+- 验证: reproduce the current raw-channel behavior; focused host tests after each slice; clean single-process ESP-IDF build; exact app-flash/attestation; bounded synthetic wake matrix and first-word audio evidence; full Gateway/firmware regression before any human acoustic gate.
+- 边界: ¥0; no cloud/model calls; no Davie Gateway/executor/proactivity changes; no TF format; no blind threshold reduction; no synthetic evidence reported as human wake, audible playback, or room-noise acceptance.
+- 发现: custom MultiNet previously consumed a raw left microphone channel and voice startup discarded a fixed 120 ms, so AEC/NS were bypassed and the first post-wake word could be clipped.
+- 修复: custom wake now consumes `AFE_TYPE_SR` processed mono with configured AEC/NS/VAD; a channel-aligned 500 ms bounded bridge carries wake-to-conversation PCM; stale audio expires at 5 seconds; fixed warmup discard is removed; malformed interleaved PCM fails closed.
+- 验证证据: `cmake --build firmware/build-host-tests-p1 --parallel 1 && ctest --test-dir firmware/build-host-tests-p1 --output-on-failure` -> 3/3 passed; `idf.py -B build-davie-p1 build` -> success, app `0x446b60`, 13% free; generated upstream patch applied cleanly to a fresh `v2.2.4` clone and reproduced the vendored tree except ignored generated `lang_config.h`.
+- 花费: ¥0。
+- 后续: commit this verified implementation, rebuild from the committed revision, back up the current device image to NAS, flash app-only, then collect boot/heap/attestation/wake evidence before requesting human acoustic validation.
+
+### 【进行中】Codex 2026-07-24 17:48 Asia/Singapore — Desktop Robot P1 physical deployment and automated acceptance (TTL 8h)
+- 正在改: P1 deployment evidence/report, device app partition, and this ledger.
+- 目标: prove the committed P1 firmware boots reliably, reports truthful AFE/pre-roll attestation, retains Wi-Fi/TF/Gateway functionality, and improves bounded synthetic wake/first-word behavior without panic, WDT, or stale replay.
+- 验证: committed-revision clean build; verified NAS backup; app-only flash/readback; serial boot and heap audit; MCP attestation; repeated synthetic wake and first-word canaries; Gateway/firmware regression.
+- 边界: ¥0; no cloud/model calls; no Davie Gateway/executor/proactivity changes; no NVS/TF/assets write; no automated evidence represented as human acoustic acceptance.
