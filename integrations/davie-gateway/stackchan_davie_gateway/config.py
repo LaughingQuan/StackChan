@@ -45,6 +45,17 @@ class Settings:
     max_reader_chars: int = 500_000
     reader_state_path: str = "/var/lib/stackchan-davie/readers.json"
     recent_session_limit: int = 20
+    diagnostic_state_path: str = "/var/lib/stackchan-davie/diagnostics.json"
+    diagnostic_timeline_limit: int = 128
+    audio_diagnostic_root: str = "/var/lib/stackchan-davie/audio-diagnostics"
+    audio_diagnostic_nas_root: str = ""
+    audio_diagnostic_recent_limit: int = 20
+    audio_flow_stale_seconds: float = 2.0
+    attestation_timeout_seconds: float = 8.0
+    expected_firmware_project: str = "stack-chan"
+    expected_firmware_version: str = "1.4.3"
+    expected_firmware_revision: str = ""
+    expected_firmware_sha256: str = ""
 
     @property
     def websocket_url(self) -> str:
@@ -126,4 +137,39 @@ class Settings:
             recent_session_limit=int(
                 os.environ.get("STACKCHAN_RECENT_SESSION_LIMIT", "20")
             ),
+            diagnostic_state_path=os.environ.get(
+                "STACKCHAN_DIAGNOSTIC_STATE_PATH",
+                "/var/lib/stackchan-davie/diagnostics.json",
+            ),
+            diagnostic_timeline_limit=int(
+                os.environ.get("STACKCHAN_DIAGNOSTIC_TIMELINE_LIMIT", "128")
+            ),
+            audio_diagnostic_root=os.environ.get(
+                "STACKCHAN_AUDIO_DIAGNOSTIC_ROOT",
+                "/var/lib/stackchan-davie/audio-diagnostics",
+            ).strip(),
+            audio_diagnostic_nas_root=os.environ.get(
+                "STACKCHAN_AUDIO_DIAGNOSTIC_NAS_ROOT", ""
+            ).strip(),
+            audio_diagnostic_recent_limit=int(
+                os.environ.get("STACKCHAN_AUDIO_DIAGNOSTIC_RECENT_LIMIT", "20")
+            ),
+            audio_flow_stale_seconds=float(
+                os.environ.get("STACKCHAN_AUDIO_FLOW_STALE_SECONDS", "2")
+            ),
+            attestation_timeout_seconds=float(
+                os.environ.get("STACKCHAN_ATTESTATION_TIMEOUT_SECONDS", "8")
+            ),
+            expected_firmware_project=os.environ.get(
+                "STACKCHAN_EXPECTED_FIRMWARE_PROJECT", "stack-chan"
+            ).strip(),
+            expected_firmware_version=os.environ.get(
+                "STACKCHAN_EXPECTED_FIRMWARE_VERSION", "1.4.3"
+            ).strip(),
+            expected_firmware_revision=os.environ.get(
+                "STACKCHAN_EXPECTED_FIRMWARE_REVISION", ""
+            ).strip().lower(),
+            expected_firmware_sha256=os.environ.get(
+                "STACKCHAN_EXPECTED_FIRMWARE_SHA256", ""
+            ).strip().lower(),
         )

@@ -35,15 +35,49 @@ handoff:
   - "Report completed stages, exact test evidence, physical checks still pending, commit IDs, and rollback instructions."
 ```
 
+## Run Contract · Desktop Robot Interaction P0-P8
+
+```yaml
+project: "Davie Desktop Robot interaction stack (/Users/jm2m/Documents/stackchan-davie, /Users/jm2m/Documents/davie-platform, /Users/jm2m/Documents/davie-media-gateway)"
+scope: "Implement DAVIE_DESKTOP_ROBOT_INTERACTION_OPTIMIZATION_PLAN_2026-07-24.html strictly from P0 through P8. Each phase must pass its zero-cost and physical exit gates before the next phase starts."
+autonomy_level: "bounded"
+boundaries:
+  - "Money budget is zero; no paid or cloud API calls."
+  - "Do not modify Davie executor/proactivity core."
+  - "Do not replace the production jm-stackchan plugin or claim production capability before canary and physical evidence."
+  - "Do not format the TF card, expose credentials, or use TF as the only copy of user data."
+  - "Do not claim wake, audible playback, barge-in, camera understanding, or reader endurance from protocol-only evidence."
+  - "Do not enter P1 until P0 identity, connectivity, diagnostics, and restart gates pass; apply the same hard gate between every later phase."
+stop:
+  - "A phase remains failing after three bounded repair attempts."
+  - "A physical action or product decision is required and no dependency-safe work remains."
+  - "Two consecutive loops find no valuable in-scope work."
+budget:
+  money: 0
+verify:
+  zero_cost:
+    - "Gateway and plugin test suites exit 0."
+    - "Firmware host tests and full ESP-IDF build exit 0 for firmware changes."
+    - "Davie Platform full tests, contract validation, and wheel build exit 0 for platform changes."
+    - "Media protocol fixtures and local worker smoke checks exit 0 for media changes."
+    - "Secret scan and git diff --check exit 0."
+    - "Every physical claim includes device monotonic timestamps and an observable human/device receipt."
+paid_allowed_after_zero_cost: false
+comms_log: "/Users/jm2m/Documents/stackchan-davie/STACKCHAN_DAVIE_LOOP.md"
+progress_log: "/Users/jm2m/Documents/stackchan-davie/STACKCHAN_DAVIE_LOOP.md"
+handoff:
+  - "Record each phase's implementation, exact test output, physical evidence, residual risks, commit IDs, deployment state, and rollback point."
+```
+
 ## Claims
 
-### 【进行中】Codex 2026-07-23 22:38 Asia/Singapore — StackChan Readiness P0 control plane (TTL 6h)
+### 【已关闭】Codex 2026-07-23 22:38 Asia/Singapore — StackChan Readiness P0 control plane (TTL 6h)
 - 正在改: `integrations/davie-gateway/**`, 必要时 `firmware/**`, `docs/**`, `STACKCHAN_DAVIE_LOOP.md`
 - 目标: 补齐会话生命周期、超时休眠/显式关闭、no-speech/低质量输入门禁、避免误打断与取消风暴，并形成可观察验收证据。
 - 验证: 每个原子阶段新增/更新测试后执行 Gateway 全量回归；固件若改动则追加 host test、完整 ESP-IDF build、分区兼容和 secret scan；部署后做 Rock5B live smoke 与 StackChan 非人工证据检查。
 - 边界: ¥0；不调用付费/云端模型；不改 Davie executor/proactivity 核心；不把合成声音或网络可达冒充真人唤醒/听声通过；真人测试缺失时保持明确 pending-human。
 
-### 【进行中】Codex 2026-07-23 04:16 Asia/Singapore — Davie callable StackChan integration   (TTL 30m)
+### 【已关闭】Codex 2026-07-23 04:16 Asia/Singapore — Davie callable StackChan integration   (TTL 30m)
 - 正在改: integrations/hermes-stackchan/**, integrations/davie-gateway/**（仅在合同缺口需要时）, docs/**, STACKCHAN_DAVIE_LOOP.md, /Users/jm2m/.hermes/plugins/jm-stackchan/**（独立安装副本）
 - 目标: 让 Davie 通过解耦工具调用 StackChan 的状态、说话、视觉、伴读和设备控制，并逐项验证；不直接修改脏 Hermes 核心。
 - 验证: 新集成单测/MCP或插件发现测试、gateway 38 项回归、零付费 production smoke、tracked secret scan、git diff/status。
@@ -133,7 +167,7 @@ handoff:
 - 边界: 未改 Hermes 核心，未泄露 token/设备标识，未声称真人声学通过。
 - 后续: 实现主动说话与摄像头解释工具，并分别验证在线/离线错误语义。
 
-### 【进行中】Codex 2026-07-23 04:22 Asia/Singapore — Davie StackChan speech and vision tools   (TTL 30m)
+### 【已关闭】Codex 2026-07-23 04:22 Asia/Singapore — Davie StackChan speech and vision tools   (TTL 30m)
 - 正在改: integrations/hermes-stackchan/**, STACKCHAN_DAVIE_LOOP.md
 - 目标: 注册 `stackchan_say` 与 `stackchan_vision`，自动选择唯一在线或默认设备，离线时给出可执行唤醒提示。
 - 验证: 插件 HTTP 合同单测、Gateway 38 项回归、compileall、diff check。
@@ -147,7 +181,7 @@ handoff:
 - 边界: 未把模拟 HTTP 结果表述为真实扬声器/摄像头物理通过。
 - 后续: 实现可恢复伴读的 load/status/play/pause/resume/stop/clear。
 
-### 【进行中】Codex 2026-07-23 04:24 Asia/Singapore — Davie StackChan resumable reader tool   (TTL 30m)
+### 【已关闭】Codex 2026-07-23 04:24 Asia/Singapore — Davie StackChan resumable reader tool   (TTL 30m)
 - 正在改: integrations/hermes-stackchan/**, STACKCHAN_DAVIE_LOOP.md
 - 目标: 让 Davie 可离线预装文章/书籍并在设备唤醒后逐句播放、暂停和续读。
 - 验证: reader HTTP 合同测试、输入边界测试、Gateway 38 项回归、compileall、diff check。
@@ -161,7 +195,7 @@ handoff:
 - 边界: 未重复实现 PDF/DOCX 解析；未声称物理播放听感通过。
 - 后续: 实现受控音量、头部和 LED 白名单操作。
 
-### 【进行中】Codex 2026-07-23 04:28 Asia/Singapore — Davie StackChan device controls   (TTL 30m)
+### 【已关闭】Codex 2026-07-23 04:28 Asia/Singapore — Davie StackChan device controls   (TTL 30m)
 - 正在改: integrations/hermes-stackchan/**, STACKCHAN_DAVIE_LOOP.md
 - 目标: 仅暴露经过固件合同验证的高层设备动作，禁止任意 MCP 名称/参数透传。
 - 验证: 映射与边界单测、未知动作拒绝、Gateway 38 项回归、compileall、diff check。
@@ -175,7 +209,7 @@ handoff:
 - 边界: 未暴露任意 MCP 透传，未声称真实舵机/LED 物理动作通过。
 - 后续: 补齐本地提醒创建、查看和停止。
 
-### 【进行中】Codex 2026-07-23 04:31 Asia/Singapore — Davie StackChan local reminders   (TTL 30m)
+### 【已关闭】Codex 2026-07-23 04:31 Asia/Singapore — Davie StackChan local reminders   (TTL 30m)
 - 正在改: integrations/hermes-stackchan/**, STACKCHAN_DAVIE_LOOP.md
 - 目标: 通过固件白名单 MCP 合同创建/list/stop 设备本地提醒。
 - 验证: reminder 映射/边界单测、Gateway 38 项回归、compileall、diff check。
@@ -189,7 +223,7 @@ handoff:
 - 边界: 未修改 Hermes cron，未将提醒描述为跨重启持久。
 - 后续: 可重复安装插件、配置本地凭据引用、验证 Hermes 工具发现。
 
-### 【进行中】Codex 2026-07-23 04:34 Asia/Singapore — install and register jm-stackchan   (TTL 30m)
+### 【已关闭】Codex 2026-07-23 04:34 Asia/Singapore — install and register jm-stackchan   (TTL 30m)
 - 正在改: integrations/hermes-stackchan/**, docs/**, STACKCHAN_DAVIE_LOOP.md, /Users/jm2m/.hermes/plugins/jm-stackchan/**, /Users/jm2m/.hermes/stackchan.json, /Users/jm2m/.hermes/secrets/stackchan-admin-token, /Users/jm2m/.hermes/config.yaml（仅通过 Hermes 官方插件启用命令）
 - 目标: 以独立插件安装，不改 325 项脏 Hermes 核心；六个工具在真实 Hermes registry 可发现。
 - 验证: 安装脚本单测/干跑、插件 list/status、registry 六工具、Gateway 生产只读 smoke、源/安装 hash 一致。
@@ -203,7 +237,7 @@ handoff:
 - 边界: token 未输出/入库；配置已 NAS 备份；未强行修改 Hermes 不识别的 `teams` 平台。
 - 后续: 重启 Davie Gateway，让长驻进程载入插件并执行真实会话 smoke。
 
-### 【进行中】Codex 2026-07-23 04:41 Asia/Singapore — production Davie StackChan activation   (TTL 30m)
+### 【已关闭】Codex 2026-07-23 04:41 Asia/Singapore — production Davie StackChan activation   (TTL 30m)
 - 正在改: 仅运行态 Gateway 重启、验证日志、docs/**, STACKCHAN_DAVIE_LOOP.md
 - 目标: 长驻 Davie 加载六个 StackChan 工具，Web/Telegram/Feishu 共用同一注册结果。
 - 验证: pre/post PID、health、启动日志无新 traceback、实际 agent tool schema/status smoke、Gateway/插件回归。
@@ -258,7 +292,7 @@ handoff:
 - 边界: 未调用付费模型，未修改 Davie executor/proactivity；合成 canary 只能证明协议和音频数据链路，真人唤醒率、人耳音质、房间回声和播放中打断仍需现场验收。
 - 后续: 将当前未版本化的 NVIDIA media-gateway 纳入独立仓库后，再隔离评估 CosyVoice vLLM/TensorRT 真 chunk streaming；不要直接改生产 worker。Davie 的通用“current version”确定性健康路由会把 Stack-chan 版本问句误判成 Hermes Gateway 状态，精确知识检索不受影响；该路由应在独立 Davie 变更中修复，不能混入本仓库。
 
-### 【进行中】Codex 2026-07-24 00:00 Asia/Singapore — TF storage and interaction loop (TTL 8h)
+### 【已关闭】Codex 2026-07-24 00:00 Asia/Singapore — TF storage and interaction loop (TTL 8h)
 - 正在改: `firmware/main/hal/board/**`, `firmware/main/hal/hal_mcp.cpp`, `firmware/main/CMakeLists.txt`, `firmware/main/Kconfig.projbuild`, `firmware/sdkconfig.defaults.davie.example`, `integrations/davie-gateway/**`, `integrations/hermes-stackchan/**`, `docs/**`, `README.md`, `STACKCHAN_DAVIE_LOOP.md`
 - 目标: 安全启用 CoreS3 TF 卡，提供可观察、可降级的存储能力，并用于伴读缓存、离线恢复、有限诊断与更流畅的 Davie 交互；每个阶段验证后再继续。
 - 验证: firmware host test、完整 ESP-IDF build、Gateway/插件全量测试、secret scan、分区兼容、TF 实卡 mount/read/write/screen coexistence canary、生产服务与设备回归。
@@ -306,3 +340,26 @@ handoff:
 - 完成: P1 可选 TF 基础、P2 有界边缘记忆、P3 语音/触控双入口、P4 可信实时状态与性能 fast path、P5 UTF-8 加固与深度回归全部完成；源代码、安装插件、生产 Gateway、HTML 指南和 Knowledge Atlas 同步进入收尾。
 - 发布状态: Stack-chan Gateway 0.4.3、Hermes 插件 0.2.0；最终固件和恢复备份均已生成并校验。机器人重新在线后仅需刷最终 app 镜像并执行文档中的真人验收，不需要重新设计或重做 TF 功能。
 - 命门: 没有修改 Davie executor/proactivity；没有格式化 TF；没有保存 Wi-Fi 密码、token、原始音频或整本书；没有把协议 smoke 冒充真人体验。
+
+### 【完成】Codex 2026-07-24 11:39 Asia/Singapore — reconcile stale Stack-chan claims
+- 发现: 日志中有 9 个 2026-07-23/24 的 `【进行中】` 标题已经过 TTL，但对应实现、验证、发布和完成记录均存在；代码工作树在本轮开始前为 clean。
+- 修复: 将 9 个陈旧标题标记为 `【已关闭】`，保留原始认领和完成证据；新增 Desktop Robot P0-P8 独立运行合同，避免把旧 TF/工具 P 编号与本轮实体交互 P0-P8 混淆。
+- 验证: `git status --short --branch` 在协调修复前仅显示 clean branch；`rg -n '【进行中】' STACKCHAN_DAVIE_LOOP.md` 将在新认领写入后只保留本轮有效认领。
+- 花费: ¥0；没有调用模型、云端或付费 API。
+- 边界: 没有修改运行代码、生产服务、凭据、固件或设备状态。
+
+### 【进行中】Codex 2026-07-24 11:39 Asia/Singapore — Desktop Robot P0 identity and evidence loop (TTL 8h)
+- 正在改: `firmware/main/hal/{hal_mcp.cpp,hal_ws_avatar.cpp}`, `firmware/main/hal/board/{davie_device_attestation.*,stackchan_display.cc}`, `firmware/main/CMakeLists.txt`, `integrations/davie-gateway/**`, corresponding Gateway/firmware tests, P0 report, and this ledger.
+- 目标: prove exact firmware/audio/wake/TF/network identity, separate service/device/audio health, preserve one bounded diagnostic timeline, and establish restart/reconnect evidence before any P1 acoustic tuning.
+- 验证: focused protocol/session/app tests after each slice; full Gateway suite, firmware host tests/full ESP-IDF build, secret scan, diff check, device hello/MCP receipt, 20 reconnect cycles, and 30-minute online evidence.
+- 边界: ¥0; no cloud/model calls; no Hermes executor/proactivity changes; no TF format; no production deployment before zero-cost checks; no P1 changes or physical-success claim before P0 exit.
+
+### 【完成】Codex 2026-07-24 13:18 Asia/Singapore — Desktop Robot P0 software gate
+- 固件身份证明: 新增 `self.davie.get_attestation`，回执包含 1.4.3 固件版本、12 位 Git revision、构建时间、ELF SHA256、boot reason、heap、AFE/AEC/codec channels、wake model、TF 状态、Wi-Fi connected/RSSI；不含 SSID、凭据、音频或用户内容。
+- 可信状态: Gateway 0.6.0 明确区分 `service_healthy`、`device_connected`、`last_seen_at`、`audio_flowing`、handshake、attestation 与 expected firmware match，并把有界事件时间线原子持久化。
+- 受控诊断: 只有管理员显式 arm 才保存 Gateway 实际收到的 AFE output，单次 1-10 秒，实时线程失败隔离，异步写 WAV/manifest，最近本地副本有上限，NAS 保留归档；TF 只记录同一 capture 的起止时间线，不在 ESP32 实时音频线程同步写大文件。
+- 恢复反馈: 固件已有 Wi-Fi 自动扫描/重连和 Gateway 5 秒 WebSocket 重连；本轮补齐空实现的屏幕 notification，并为 disconnect/stall/restored 增加去重提示，heartbeat stall 会主动关闭旧 socket 后重连。
+- 版本治理: 原未版本化的 media gateway 已建立独立私有仓库 `LaughingQuan/davie-media-gateway`，初始提交 `a327648`，本地测试 `2 passed`。
+- 自动验证: Gateway 全量 `80 passed`；Gateway wheel/sdist 0.6.0 构建成功；固件 full ESP-IDF build 成功，app `0x4456f0`、分区剩余 `0xaa910`（13%）；`motion_math_test` 与 `davie_tf_text_test` 均 exit 0；`git diff --check` 通过；新增 diff 未发现真实凭据。
+- 仍未通过: 实体设备 `192.168.50.210` 当前离线且无 USB serial，因此未刷最终固件，未取得设备 attestation，未执行物理 20/20 断电重连或连续 30 分钟在线。P0 不得标记整体通过，不进入 P1。
+- 花费/边界: ¥0；没有调用云端或付费模型；没有修改 Davie executor/proactivity；没有格式化 TF；没有把模拟 20 次 WebSocket 重连测试冒充物理断电重连。

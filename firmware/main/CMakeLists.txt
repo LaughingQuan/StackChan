@@ -15,10 +15,31 @@ file(GLOB_RECURSE STACK_CHAN_SOURCES
     "stackchan/*.cc"
     "stackchan/*.cpp"
 )
+# Keep the P0 attestation source explicit so an existing incremental build
+# cannot silently omit it before CMake has refreshed the recursive glob.
+list(APPEND STACK_CHAN_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/hal/board/davie_device_attestation.cc"
+)
+list(REMOVE_DUPLICATES STACK_CHAN_SOURCES)
 set(STACK_CHAN_INCLUDE_DIRS 
     "."
 )
 list(APPEND STACK_CHAN_SOURCES main.cpp)
+
+set(STACKCHAN_DAVIE_SOURCE_REVISION "unknown")
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} -C "${CMAKE_CURRENT_SOURCE_DIR}/../.." rev-parse --short=12 HEAD
+        OUTPUT_VARIABLE STACKCHAN_DAVIE_SOURCE_REVISION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE STACKCHAN_DAVIE_GIT_RESULT
+    )
+    if(NOT STACKCHAN_DAVIE_GIT_RESULT EQUAL 0 OR NOT STACKCHAN_DAVIE_SOURCE_REVISION)
+        set(STACKCHAN_DAVIE_SOURCE_REVISION "unknown")
+    endif()
+endif()
 
 # Define source files
 set(SOURCES "audio/audio_codec.cc"
@@ -335,6 +356,7 @@ endif()
 target_compile_definitions(${COMPONENT_LIB}
                     PRIVATE BOARD_TYPE=\"${BOARD_TYPE}\" BOARD_NAME=\"${BOARD_NAME}\"
                     PRIVATE BUILTIN_TEXT_FONT=${BUILTIN_TEXT_FONT} BUILTIN_ICON_FONT=${BUILTIN_ICON_FONT}
+                    PRIVATE STACKCHAN_DAVIE_SOURCE_REVISION=\"${STACKCHAN_DAVIE_SOURCE_REVISION}\"
                     )
 
 # Add generation rules

@@ -6,6 +6,7 @@ import logging
 import re
 import time
 import uuid
+from collections import deque
 from typing import Any, Callable, Protocol
 
 from .audio import (
@@ -83,6 +84,10 @@ class StackChanSession:
         client_id: str,
         codec_factory: Callable[[int, int, int], OpusCodec] = OpusCodec,
         reader: ReaderState | None = None,
+        diagnostic_sink: Callable[[str, dict[str, Any]], None] | None = None,
+        diagnostic_audio_sink: (
+            Callable[[str, str, bytes, int], dict[str, Any] | None] | None
+        ) = None,
     ):
         self.transport = transport
         self.settings = settings
@@ -91,6 +96,8 @@ class StackChanSession:
         self.device_id = device_id or "unknown-device"
         self.client_id = client_id or "unknown-client"
         self.reader = reader or ReaderState(device_id=self.device_id)
+        self.diagnostic_sink = diagnostic_sink
+        self.diagnostic_audio_sink = diagnostic_audio_sink
         self.session_id = f"stackchan-{uuid.uuid4().hex}"
         self.davie_session_id: str | None = None
         self.hello: ClientHello | None = None
@@ -109,6 +116,8 @@ class StackChanSession:
         self.last_error = ""
         self.audio_frames_received = 0
         self.audio_frames_sent = 0
+        self.last_audio_received_at: float | None = None
+        self.last_audio_sent_at: float | None = None
         self.interrupt_count = 0
         self.turn_count = 0
         self.accepted_turn_count = 0
@@ -127,9 +136,15 @@ class StackChanSession:
         self.last_barge_in_at: float | None = None
         self.mcp_tools: dict[str, dict[str, Any]] = {}
         self.mcp_initialized = False
+        self.device_attestation: dict[str, Any] = {}
+        self.attestation_state = "not_requested"
+        self.attestation_received_at: float | None = None
+        self.attestation_error = ""
         self._mcp_request_id = 0
         self._mcp_pending: dict[int, str] = {}
         self._mcp_waiters: dict[int, asyncio.Future[dict[str, Any]]] = {}
+        self._attestation_task: asyncio.Task | None = None
+        self._diagnostic_marker_tasks: set[asyncio.Task] = set()
         self._reader_checkpoint_task: asyncio.Task | None = None
         self._pending_reader_checkpoint: dict[str, Any] | None = None
         self.reader_checkpoint_mirror_count = 0
@@ -143,8 +158,14 @@ class StackChanSession:
         self.close_reason = ""
         self.idle_timeout_count = 0
         self.state_transition_count = 0
-        self._last_activity_monotonic = time.monotonic()
+        self._connected_monotonic = time.monotonic()
+        self._last_activity_monotonic = self._connected_monotonic
         self._inactivity_task: asyncio.Task | None = None
+        self._diagnostic_sequence = 0
+        self._diagnostic_timeline: deque[dict[str, Any]] = deque(
+            maxlen=max(16, self.settings.diagnostic_timeline_limit)
+        )
+        self._record_diagnostic_event("connected", persist=True)
 
     def _new_endpoint(self) -> PcmEndpointDetector:
         return PcmEndpointDetector(
@@ -154,6 +175,104 @@ class StackChanSession:
             max_turn_ms=self.settings.endpoint_max_turn_ms,
             min_rms=self.settings.endpoint_min_rms,
         )
+
+    def _record_diagnostic_event(
+        self,
+        stage: str,
+        *,
+        persist: bool = False,
+        **details: Any,
+    ) -> None:
+        self._diagnostic_sequence += 1
+        safe_details: dict[str, Any] = {}
+        for raw_key, value in list(details.items())[:16]:
+            key = str(raw_key)[:80]
+            if value is None or isinstance(value, (bool, int, float)):
+                safe_details[key] = value
+            else:
+                safe_details[key] = str(value)[:240]
+        self._diagnostic_timeline.append(
+            {
+                "sequence": self._diagnostic_sequence,
+                "stage": str(stage)[:80],
+                "at": time.time(),
+                "elapsed_ms": round(
+                    max(0.0, time.monotonic() - self._connected_monotonic)
+                    * 1000,
+                    3,
+                ),
+                "details": safe_details,
+            }
+        )
+        if persist and self.diagnostic_sink is not None:
+            try:
+                self.diagnostic_sink(stage, self.diagnostic_status())
+            except Exception:
+                LOGGER.exception("StackChan diagnostic sink failed")
+
+    def record_diagnostic_event(
+        self,
+        stage: str,
+        *,
+        persist: bool = False,
+        **details: Any,
+    ) -> None:
+        self._record_diagnostic_event(stage, persist=persist, **details)
+
+    @property
+    def audio_flowing(self) -> bool:
+        if self.closed or self.hello is None or self.last_audio_received_at is None:
+            return False
+        return (
+            time.time() - self.last_audio_received_at
+            <= self.settings.audio_flow_stale_seconds
+        )
+
+    @property
+    def identity_verified(self) -> bool:
+        firmware = self.device_attestation.get("firmware")
+        return bool(
+            self.attestation_state == "ready"
+            and isinstance(firmware, dict)
+            and str(firmware.get("version") or "")
+            and str(firmware.get("elf_sha256") or "")
+        )
+
+    @property
+    def firmware_expectation_state(self) -> str:
+        if not self.identity_verified:
+            return "identity_unavailable"
+        firmware = self.device_attestation.get("firmware") or {}
+        if (
+            str(firmware.get("project") or "")
+            != self.settings.expected_firmware_project
+            or str(firmware.get("version") or "")
+            != self.settings.expected_firmware_version
+        ):
+            return "mismatch"
+        expected_revision = self.settings.expected_firmware_revision.lower()
+        if expected_revision and (
+            str(firmware.get("source_revision") or "").lower()
+            != expected_revision
+        ):
+            return "mismatch"
+        expected_sha = self.settings.expected_firmware_sha256.lower()
+        if not expected_sha:
+            return "version_matched_hash_unconfigured"
+        if str(firmware.get("elf_sha256") or "").lower() != expected_sha:
+            return "mismatch"
+        return "matched"
+
+    @property
+    def intended_firmware_verified(self) -> bool:
+        return self.firmware_expectation_state == "matched"
+
+    def _audio_input_state(self) -> str:
+        if self.closed:
+            return "closed"
+        if self.last_audio_received_at is None:
+            return "not_started"
+        return "flowing" if self.audio_flowing else "stale"
 
     async def handle_text(self, raw: str) -> None:
         self._ensure_open()
@@ -190,6 +309,14 @@ class StackChanSession:
         )
         self._mark_activity("hello")
         self._set_state("ready")
+        self._record_diagnostic_event(
+            "handshake_complete",
+            persist=True,
+            protocol_version=self.hello.version,
+            sample_rate=self.hello.sample_rate,
+            supports_mcp=self.hello.supports_mcp,
+            supports_server_aec=self.hello.supports_server_aec,
+        )
         self._start_inactivity_watchdog()
         if self.hello.supports_mcp:
             await self._send_mcp_request(
@@ -205,6 +332,14 @@ class StackChanSession:
                     "clientInfo": {"name": "stackchan-davie-gateway", "version": __version__},
                 },
                 purpose="initialize",
+            )
+        else:
+            self.attestation_state = "unavailable"
+            self.attestation_error = "mcp_unsupported"
+            self._record_diagnostic_event(
+                "attestation_unavailable",
+                persist=True,
+                reason=self.attestation_error,
             )
 
     async def _handle_listen(self, payload: dict[str, Any]) -> None:
@@ -240,12 +375,17 @@ class StackChanSession:
             return
         if "error" in message:
             self.last_error = f"mcp_{purpose or 'request'}_failed"
+            self._record_diagnostic_event(
+                "mcp_request_failed",
+                purpose=purpose or "unknown",
+            )
             return
         result = message.get("result")
         if not isinstance(result, dict):
             return
         if purpose == "initialize":
             self.mcp_initialized = True
+            self._record_diagnostic_event("mcp_initialized")
             await self._request_mcp_tools("")
         elif purpose == "tools/list":
             tools = result.get("tools")
@@ -256,6 +396,12 @@ class StackChanSession:
             next_cursor = result.get("nextCursor")
             if isinstance(next_cursor, str) and next_cursor:
                 await self._request_mcp_tools(next_cursor)
+            else:
+                self._record_diagnostic_event(
+                    "mcp_tools_discovered",
+                    tool_count=len(self.mcp_tools),
+                )
+                self._start_attestation_probe()
 
     async def _send_mcp_request(
         self,
@@ -291,6 +437,107 @@ class StackChanSession:
             purpose="tools/list",
         )
 
+    def _start_attestation_probe(self) -> None:
+        if self._attestation_task is not None or self.attestation_state != "not_requested":
+            return
+        if "self.davie.get_attestation" not in self.mcp_tools:
+            self.attestation_state = "unavailable"
+            self.attestation_error = "device_attestation_tool_unavailable"
+            self._record_diagnostic_event(
+                "attestation_unavailable",
+                persist=True,
+                reason=self.attestation_error,
+            )
+            return
+        self.attestation_state = "pending"
+        self.attestation_error = ""
+        self._record_diagnostic_event("attestation_requested", persist=True)
+        self._attestation_task = asyncio.create_task(self._load_device_attestation())
+
+    async def _load_device_attestation(self) -> None:
+        try:
+            result = await self.call_tool(
+                "self.davie.get_attestation",
+                {},
+                timeout=self.settings.attestation_timeout_seconds,
+            )
+            payload = self._extract_tool_json(result)
+            self._validate_device_attestation(payload)
+            self.device_attestation = payload
+            self.attestation_state = "ready"
+            self.attestation_received_at = time.time()
+            self.attestation_error = ""
+            firmware = payload.get("firmware") or {}
+            self._record_diagnostic_event(
+                "attestation_ready",
+                persist=True,
+                firmware_version=firmware.get("version"),
+                firmware_sha256=firmware.get("elf_sha256"),
+            )
+        except asyncio.CancelledError:
+            raise
+        except (ProtocolError, TimeoutError, ValueError) as exc:
+            self.device_attestation = {}
+            self.attestation_state = "failed"
+            self.attestation_error = str(exc)[:240] or type(exc).__name__
+            self._record_diagnostic_event(
+                "attestation_failed",
+                persist=True,
+                reason=self.attestation_error,
+            )
+
+    @staticmethod
+    def _validate_device_attestation(payload: dict[str, Any]) -> None:
+        if not payload:
+            raise ValueError("empty_device_attestation")
+        try:
+            encoded = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid_device_attestation") from exc
+        if len(encoded) > 16 * 1024:
+            raise ValueError("device_attestation_too_large")
+
+        def inspect(value: Any, *, depth: int = 0) -> None:
+            if depth > 6:
+                raise ValueError("device_attestation_too_deep")
+            if isinstance(value, dict):
+                for raw_key, item in value.items():
+                    key = str(raw_key).lower()
+                    if any(
+                        forbidden in key
+                        for forbidden in (
+                            "authorization",
+                            "credential",
+                            "password",
+                            "secret",
+                            "ssid",
+                            "token",
+                            "transcript",
+                            "user_content",
+                        )
+                    ):
+                        raise ValueError("device_attestation_contains_forbidden_field")
+                    inspect(item, depth=depth + 1)
+            elif isinstance(value, list):
+                if len(value) > 128:
+                    raise ValueError("device_attestation_list_too_large")
+                for item in value:
+                    inspect(item, depth=depth + 1)
+            elif value is not None and not isinstance(value, (str, int, float, bool)):
+                raise ValueError("device_attestation_invalid_value")
+
+        inspect(payload)
+        if payload.get("schema_version") != 1 or payload.get("status") != "ready":
+            raise ValueError("device_attestation_not_ready")
+        firmware = payload.get("firmware")
+        if not isinstance(firmware, dict):
+            raise ValueError("device_attestation_missing_firmware")
+        sha256 = str(firmware.get("elf_sha256") or "")
+        if not str(firmware.get("version") or "") or not re.fullmatch(
+            r"[0-9a-fA-F]{64}", sha256
+        ):
+            raise ValueError("device_attestation_invalid_firmware_identity")
+
     async def call_tool(
         self,
         name: str,
@@ -322,17 +569,90 @@ class StackChanSession:
         result = response.get("result")
         return result if isinstance(result, dict) else {"value": result}
 
+    async def append_device_diagnostic_marker(
+        self,
+        event: str,
+        detail: str,
+    ) -> str:
+        if "self.storage.diagnostics.append" not in self.mcp_tools:
+            return "unavailable"
+        try:
+            result = await self.call_tool(
+                "self.storage.diagnostics.append",
+                {"event": event[:80], "detail": detail[:240]},
+                timeout=min(3.0, self.settings.attestation_timeout_seconds),
+            )
+            payload = self._extract_tool_json(result)
+        except (ProtocolError, TimeoutError, ValueError):
+            return "failed"
+        return "written" if payload.get("ok") and payload.get("saved") else "failed"
+
+    def _schedule_device_diagnostic_marker(
+        self,
+        event: str,
+        detail: str,
+    ) -> None:
+        task = asyncio.create_task(
+            self.append_device_diagnostic_marker(event, detail)
+        )
+        self._diagnostic_marker_tasks.add(task)
+        task.add_done_callback(self._diagnostic_marker_tasks.discard)
+
     async def handle_binary(self, raw: bytes) -> None:
         self._ensure_open()
         if self.hello is None or self.codec is None:
             raise ProtocolError("audio received before hello")
         packet, _timestamp = unpack_audio_frame(raw, self.hello.version)
         pcm = self.codec.decode(packet)
+        if self.diagnostic_audio_sink is not None:
+            try:
+                capture = self.diagnostic_audio_sink(
+                    self.device_id,
+                    self.session_id,
+                    pcm,
+                    self.hello.sample_rate,
+                )
+            except Exception as exc:
+                LOGGER.exception("Diagnostic audio sink failed")
+                self._record_diagnostic_event(
+                    "audio_diagnostic_sink_failed",
+                    persist=True,
+                    error_type=type(exc).__name__,
+                )
+            else:
+                if capture is not None:
+                    self._record_diagnostic_event(
+                        "audio_diagnostic_capture_terminal",
+                        persist=True,
+                        capture_id=capture.get("capture_id"),
+                        status=capture.get("status"),
+                        captured_ms=capture.get("captured_ms"),
+                    )
+                    self._schedule_device_diagnostic_marker(
+                        "audio_capture_terminal",
+                        (
+                            f"id={capture.get('capture_id')};"
+                            f"status={capture.get('status')};"
+                            f"captured_ms={capture.get('captured_ms')}"
+                        ),
+                    )
+        first_audio_frame = self.audio_frames_received == 0
         self.audio_frames_received += 1
+        self.last_audio_received_at = time.time()
+        if first_audio_frame:
+            self._record_diagnostic_event(
+                "audio_input_started",
+                persist=True,
+                decoded_pcm_bytes=len(pcm),
+            )
         result = self.endpoint.feed(pcm)
         if result.speech_started:
             self._mark_activity("speech_started")
             self._set_state("listening")
+            self._record_diagnostic_event(
+                "speech_started",
+                voiced_ms=result.voiced_ms,
+            )
             if self._response_in_flight():
                 self.barge_in_candidate = True
                 self.barge_in_candidate_count += 1
@@ -1431,7 +1751,15 @@ class StackChanSession:
                     timestamp_ms=timestamp,
                 )
             )
+            first_audio_output = self.audio_frames_sent == 0
             self.audio_frames_sent += 1
+            self.last_audio_sent_at = time.time()
+            if first_audio_output:
+                self._record_diagnostic_event(
+                    "audio_output_started",
+                    persist=True,
+                    generation_id=generation,
+                )
             metrics["streamed_audio_ms"] = (
                 int(metrics["streamed_audio_ms"])
                 + self.settings.frame_duration_ms
@@ -1574,9 +1902,15 @@ class StackChanSession:
     def _set_state(self, state: str) -> None:
         if self.state == state:
             return
+        previous = self.state
         self.state = state
         self.state_changed_at = time.time()
         self.state_transition_count += 1
+        self._record_diagnostic_event(
+            "state_changed",
+            previous=previous,
+            current=state,
+        )
 
     def _mark_activity(self, reason: str) -> None:
         self.last_activity_at = time.time()
@@ -1629,6 +1963,8 @@ class StackChanSession:
     async def close(self, *, close_transport: bool = False, reason: str = "connection_closed") -> None:
         inactivity_task: asyncio.Task | None = None
         checkpoint_task: asyncio.Task | None = None
+        attestation_task: asyncio.Task | None = None
+        diagnostic_marker_tasks: list[asyncio.Task] = []
         async with self.response_lock:
             if self.closed:
                 return
@@ -1657,6 +1993,15 @@ class StackChanSession:
             self._reader_checkpoint_task = None
             if checkpoint_task and checkpoint_task is not asyncio.current_task():
                 checkpoint_task.cancel()
+            attestation_task = self._attestation_task
+            self._attestation_task = None
+            if attestation_task and attestation_task is not asyncio.current_task():
+                attestation_task.cancel()
+            diagnostic_marker_tasks = list(self._diagnostic_marker_tasks)
+            self._diagnostic_marker_tasks.clear()
+            for task in diagnostic_marker_tasks:
+                if task is not asyncio.current_task():
+                    task.cancel()
         if inactivity_task and inactivity_task is not asyncio.current_task():
             try:
                 await inactivity_task
@@ -1667,11 +2012,68 @@ class StackChanSession:
                 await checkpoint_task
             except asyncio.CancelledError:
                 pass
+        if attestation_task and attestation_task is not asyncio.current_task():
+            try:
+                await attestation_task
+            except asyncio.CancelledError:
+                pass
+        for task in diagnostic_marker_tasks:
+            if task is asyncio.current_task():
+                continue
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        self._record_diagnostic_event("closed", persist=True, reason=reason)
         if close_transport:
             await self.transport.close(code=1000, reason=reason)
 
+    def diagnostic_status(self) -> dict[str, Any]:
+        return {
+            "device_id": self.device_id,
+            "client_id": self.client_id,
+            "session_id": self.session_id,
+            "connected_at": self.connected_at,
+            "session_state": self.state,
+            "state_changed_at": self.state_changed_at,
+            "state_transition_count": self.state_transition_count,
+            "last_activity_at": self.last_activity_at,
+            "last_activity_reason": self.last_activity_reason,
+            "idle_timeout_count": self.idle_timeout_count,
+            "close_reason": self.close_reason,
+            "handshake_complete": self.hello is not None,
+            "identity_verified": self.identity_verified,
+            "intended_firmware_verified": self.intended_firmware_verified,
+            "firmware_expectation_state": self.firmware_expectation_state,
+            "attestation_state": self.attestation_state,
+            "attestation_received_at": self.attestation_received_at,
+            "attestation_error": self.attestation_error,
+            "device_attestation": self.device_attestation,
+            "listening": self.listening,
+            "speaking": self.speaking,
+            "generation_id": self.generation_id,
+            "turn_count": self.turn_count,
+            "accepted_turn_count": self.accepted_turn_count,
+            "empty_transcript_count": self.empty_transcript_count,
+            "rejected_transcript_count": self.rejected_transcript_count,
+            "dropped_turn_count": self.dropped_turn_count,
+            "interrupt_count": self.interrupt_count,
+            "audio_frames_received": self.audio_frames_received,
+            "audio_frames_sent": self.audio_frames_sent,
+            "last_audio_received_at": self.last_audio_received_at,
+            "last_audio_sent_at": self.last_audio_sent_at,
+            "audio_flowing": self.audio_flowing,
+            "audio_input_state": self._audio_input_state(),
+            "last_error": self.last_error,
+            "closed": self.closed,
+            "mcp_initialized": self.mcp_initialized,
+            "mcp_tool_count": len(self.mcp_tools),
+            "diagnostic_timeline": list(self._diagnostic_timeline),
+        }
+
     def status(self) -> dict[str, Any]:
         return {
+            **self.diagnostic_status(),
             "device_id": self.device_id,
             "client_id": self.client_id,
             "session_id": self.session_id,

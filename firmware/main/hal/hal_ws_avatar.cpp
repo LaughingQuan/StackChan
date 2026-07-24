@@ -16,6 +16,7 @@
 #include <wifi_station.h>
 #include <ArduinoJson.hpp>
 #include <settings.h>
+#include <atomic>
 #include <mutex>
 #include <queue>
 #include <vector>
@@ -119,14 +120,20 @@ public:
         // 设置回调
         _websocket->OnConnected([this]() {
             ESP_LOGI(_tag.c_str(), "Connected to server!");
-            // GetHAL().onWsLog.emit(CommonLogLevel::Info, "Server connected");
+            if (_disconnect_notice_active.exchange(false)) {
+                GetHAL().onWsLog.emit(CommonLogLevel::Info, "Davie connection restored");
+            }
             _last_heartbeat_time = GetHAL().millis();
             _websocket->Send("{\"type\":\"hello\", \"msg\":\"Hello from StackChan!\"}");
         });
 
         _websocket->OnDisconnected([this]() {
             ESP_LOGI(_tag.c_str(), "Disconnected!");
-            // GetHAL().onWsLog.emit(CommonLogLevel::Error, "Server disconnected");
+            if (!_disconnect_notice_active.exchange(true)) {
+                GetHAL().onWsLog.emit(
+                    CommonLogLevel::Warning,
+                    "Davie disconnected. Reconnecting...");
+            }
         });
 
         _websocket->OnData([this](const char* data, size_t len, bool binary) {
@@ -138,7 +145,11 @@ public:
         // GetHAL().onWsLog.emit(CommonLogLevel::Info, "Connecting to server...");
         if (!_websocket->Connect(_url.c_str())) {
             ESP_LOGE(_tag.c_str(), "Failed to connect");
-            GetHAL().onWsLog.emit(CommonLogLevel::Error, "Connect to server Failed");
+            if (!_disconnect_notice_active.exchange(true)) {
+                GetHAL().onWsLog.emit(
+                    CommonLogLevel::Warning,
+                    "Davie unavailable. Retrying...");
+            }
         }
         _last_reconnect_attempt = GetHAL().millis();
     }
@@ -159,7 +170,12 @@ public:
             // Check heartbeat timeout
             if (GetHAL().millis() - _last_heartbeat_time > 10000) {
                 ESP_LOGE(_tag.c_str(), "Heartbeat timeout!");
-                GetHAL().onWsLog.emit(CommonLogLevel::Error, "Heartbeat Timeout");
+                if (!_disconnect_notice_active.exchange(true)) {
+                    GetHAL().onWsLog.emit(
+                        CommonLogLevel::Warning,
+                        "Davie connection stalled. Reconnecting...");
+                }
+                _websocket->Close();
                 _last_heartbeat_time = GetHAL().millis();
                 return;
             }
@@ -430,6 +446,7 @@ private:
     uint32_t _last_reconnect_attempt = 0;
     uint32_t _last_capture_time      = 0;
     uint32_t _last_heartbeat_time    = 0;
+    std::atomic<bool> _disconnect_notice_active{false};
     bool _is_streaming               = false;
     bool _is_video_mode              = false;
     std::mutex _mutex;

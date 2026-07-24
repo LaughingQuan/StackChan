@@ -8,6 +8,7 @@
 #include <esp_err.h>
 #include <esp_lvgl_port.h>
 #include <esp_psram.h>
+#include <algorithm>
 #include <vector>
 #include <cstring>
 #include <src/misc/cache/lv_cache.h>
@@ -565,4 +566,19 @@ void StackChanAvatarDisplay::SetStatus(const char* status)
 
 void StackChanAvatarDisplay::ShowNotification(const char* notification, int duration_ms)
 {
+    if (notification == nullptr || notification[0] == '\0') {
+        return;
+    }
+
+    auto& stackchan = GetStackChan();
+    if (!stackchan.hasAvatar()) {
+        ESP_LOGW(TAG, "Notification unavailable before avatar initialization: %s", notification);
+        return;
+    }
+
+    const uint32_t bounded_duration_ms =
+        static_cast<uint32_t>(std::max(1000, std::min(duration_ms, 12000)));
+    DisplayLockGuard lock(this);
+    stackchan.addModifier(
+        std::make_unique<TimedSpeechModifier>(notification, bounded_duration_ms));
 }

@@ -8,6 +8,7 @@
 #include <mcp_server.h>
 #include <stackchan/stackchan.h>
 #include <apps/common/common.h>
+#include "board/davie_device_attestation.h"
 #include "board/hal_bridge.h"
 
 using namespace stackchan;
@@ -20,6 +21,16 @@ void Hal::xiaozhi_mcp_init()
 
     // https://github.com/78/xiaozhi-esp32/blob/main/docs/mcp-usage.md
     auto& mcp_server = McpServer::GetInstance();
+
+    mclog::tagInfo(_tag, "add davie.get_attestation tool");
+    mcp_server.AddTool(
+        "self.davie.get_attestation",
+        "Return the installed Davie firmware identity, reset reason, audio/wake configuration, "
+        "and bounded device health. It never returns credentials, SSID, audio, transcripts, "
+        "or user content.",
+        std::vector<Property>{}, [](const PropertyList& properties) -> ReturnValue {
+            return hal_bridge::board_get_davie_device_attestation_json();
+        });
 
     mclog::tagInfo(_tag, "add storage.get_status tool");
     mcp_server.AddTool(

@@ -5,7 +5,6 @@ import hmac
 import os
 import re
 import time
-from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, Callable
@@ -15,9 +14,11 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from .audio import OpusCodec
+from .audio_diagnostics import AudioDiagnosticStore
 from .capabilities import capability_manifest
 from .clients import DavieClient, MediaClient
 from .config import Settings
+from .diagnostics import DiagnosticStore
 from .protocol import ProtocolError
 from .reader import ReaderLibrary
 from .session import StackChanSession
@@ -43,6 +44,10 @@ class ReaderLoadRequest(BaseModel):
     autoplay: bool = False
 
 
+class AudioDiagnosticRequest(BaseModel):
+    duration_seconds: int = Field(default=10, ge=1, le=10)
+
+
 DEVICE_ID_PATTERN = re.compile(r"^[A-Za-z0-9:._-]{1,128}$")
 
 
@@ -65,15 +70,24 @@ def create_app(
     davie_client: DavieClient | None = None,
     codec_factory: Callable[[int, int, int], OpusCodec] = OpusCodec,
     reader_library: ReaderLibrary | None = None,
+    diagnostic_store: DiagnosticStore | None = None,
+    audio_diagnostic_store: AudioDiagnosticStore | None = None,
 ) -> FastAPI:
     config = settings or Settings.from_env()
     media = media_client or MediaClient(config.media_base_url)
     davie = davie_client or DavieClient(config.davie_base_url, config.davie_api_key)
     readers = reader_library or ReaderLibrary(config.reader_state_path)
-    sessions: dict[str, StackChanSession] = {}
-    recent_sessions: deque[dict[str, Any]] = deque(
-        maxlen=max(1, config.recent_session_limit)
+    diagnostics = diagnostic_store or DiagnosticStore(
+        config.diagnostic_state_path,
+        recent_limit=config.recent_session_limit,
     )
+    audio_diagnostics = audio_diagnostic_store or AudioDiagnosticStore(
+        config.audio_diagnostic_root or None,
+        nas_root=config.audio_diagnostic_nas_root or None,
+        recent_limit=config.audio_diagnostic_recent_limit,
+    )
+    owns_audio_diagnostics = audio_diagnostic_store is None
+    sessions: dict[str, StackChanSession] = {}
     sessions_lock = asyncio.Lock()
 
     def require_admin(authorization: str | None) -> None:
@@ -99,6 +113,8 @@ def create_app(
             sessions.clear()
         for session in active_sessions:
             await session.close(close_transport=True)
+        if owns_audio_diagnostics:
+            await asyncio.to_thread(audio_diagnostics.close)
         if media_client is None:
             await media.close()
         if davie_client is None:
@@ -108,12 +124,65 @@ def create_app(
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
+        active_statuses = [session.diagnostic_status() for session in sessions.values()]
+        flowing_count = sum(
+            1 for status in active_statuses if status["audio_flowing"]
+        )
+        handshake_count = sum(
+            1 for status in active_statuses if status["handshake_complete"]
+        )
+        identified_count = sum(
+            1 for status in active_statuses if status["identity_verified"]
+        )
+        intended_firmware_count = sum(
+            1
+            for status in active_statuses
+            if status["intended_firmware_verified"]
+        )
+        last_seen_at = max(
+            (
+                float(status["last_activity_at"])
+                for status in active_statuses
+                if status.get("last_activity_at") is not None
+            ),
+            default=None,
+        )
+        if not active_statuses:
+            device_runtime_status = "no_device"
+        elif flowing_count:
+            device_runtime_status = "audio_flowing"
+        else:
+            device_runtime_status = "connected_no_audio"
+        diagnostic_snapshot = diagnostics.snapshot()
+        audio_diagnostic_snapshot = audio_diagnostics.snapshot()
         return {
             "status": "ok",
+            "service_healthy": True,
+            "gateway_healthy": True,
             "service": "stackchan-davie-gateway",
             "version": __version__,
-            "connected_devices": len(sessions),
-            "recent_sessions": len(recent_sessions),
+            "device_runtime_status": device_runtime_status,
+            "device_connected": bool(active_statuses),
+            "connected_devices": len(active_statuses),
+            "handshake_complete_devices": handshake_count,
+            "identified_devices": identified_count,
+            "intended_firmware_devices": intended_firmware_count,
+            "audio_flowing_devices": flowing_count,
+            "last_seen_at": last_seen_at,
+            "recent_sessions": len(diagnostic_snapshot["recent_sessions"]),
+            "diagnostic_persistence": {
+                "enabled": diagnostics.persistent,
+                "load_error": diagnostics.load_error,
+                "write_error": diagnostics.write_error,
+            },
+            "audio_diagnostics": {
+                "enabled": audio_diagnostic_snapshot["enabled"],
+                "default_state": audio_diagnostic_snapshot["default_state"],
+                "active_count": len(audio_diagnostic_snapshot["active"]),
+                "nas_sync_enabled": audio_diagnostic_snapshot[
+                    "nas_sync_enabled"
+                ],
+            },
             "device_auth_configured": bool(config.device_token),
             "davie_auth_configured": bool(config.davie_api_key),
             "admin_auth_configured": bool(config.admin_token),
@@ -148,7 +217,115 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_admin(authorization)
-        return {"sessions": list(recent_sessions)}
+        return {"sessions": diagnostics.snapshot()["recent_sessions"]}
+
+    @app.get("/v1/diagnostics")
+    async def diagnostic_history(
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        return diagnostics.snapshot(
+            active_sessions=[
+                session.diagnostic_status()
+                for session in sessions.values()
+            ]
+        )
+
+    @app.get("/v1/devices/{device_id}/diagnostics")
+    async def device_diagnostics(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        if not DEVICE_ID_PATTERN.fullmatch(device_id):
+            raise HTTPException(status_code=400, detail="invalid device identity")
+        session = sessions.get(device_id)
+        return diagnostics.device_snapshot(
+            device_id,
+            active_status=session.diagnostic_status() if session else None,
+        )
+
+    @app.get("/v1/devices/{device_id}/diagnostics/audio")
+    async def audio_diagnostic_status(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        if not DEVICE_ID_PATTERN.fullmatch(device_id):
+            raise HTTPException(status_code=400, detail="invalid device identity")
+        return audio_diagnostics.snapshot(device_id)
+
+    @app.post("/v1/devices/{device_id}/diagnostics/audio")
+    async def start_audio_diagnostic(
+        device_id: str,
+        request: AudioDiagnosticRequest,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        if not DEVICE_ID_PATTERN.fullmatch(device_id):
+            raise HTTPException(status_code=400, detail="invalid device identity")
+        session = sessions.get(device_id)
+        if session is None or session.hello is None:
+            raise HTTPException(
+                status_code=409,
+                detail="device audio session is not ready",
+            )
+        try:
+            capture = audio_diagnostics.arm(
+                device_id=device_id,
+                session_id=session.session_id,
+                duration_seconds=request.duration_seconds,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        session.record_diagnostic_event(
+            "audio_diagnostic_armed",
+            persist=True,
+            capture_id=capture["capture_id"],
+            duration_seconds=request.duration_seconds,
+        )
+        capture["tf_timeline_marker"] = (
+            await session.append_device_diagnostic_marker(
+                "audio_capture_armed",
+                (
+                    f"id={capture['capture_id']};"
+                    f"duration_seconds={request.duration_seconds};"
+                    "source=gateway_received_afe_output"
+                ),
+            )
+        )
+        return capture
+
+    @app.delete("/v1/devices/{device_id}/diagnostics/audio")
+    async def cancel_audio_diagnostic(
+        device_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, Any]:
+        require_admin(authorization)
+        if not DEVICE_ID_PATTERN.fullmatch(device_id):
+            raise HTTPException(status_code=400, detail="invalid device identity")
+        capture = audio_diagnostics.cancel(device_id)
+        if capture is None:
+            raise HTTPException(
+                status_code=404,
+                detail="no active diagnostic capture",
+            )
+        session = sessions.get(device_id)
+        if session is not None:
+            session.record_diagnostic_event(
+                "audio_diagnostic_cancelled",
+                persist=True,
+                capture_id=capture["capture_id"],
+            )
+            capture["tf_timeline_marker"] = (
+                await session.append_device_diagnostic_marker(
+                    "audio_capture_cancelled",
+                    f"id={capture['capture_id']}",
+                )
+            )
+        else:
+            capture["tf_timeline_marker"] = "unavailable"
+        return capture
 
     @app.get("/v1/devices/{device_id}/capabilities")
     async def device_capabilities(
@@ -416,6 +593,8 @@ def create_app(
             client_id=client_id,
             codec_factory=codec_factory,
             reader=readers.for_device(device_id),
+            diagnostic_sink=diagnostics.record,
+            diagnostic_audio_sink=audio_diagnostics.feed,
         )
         async with sessions_lock:
             previous = sessions.get(device_id)
@@ -440,7 +619,6 @@ def create_app(
                 if sessions.get(device_id) is session:
                     sessions.pop(device_id, None)
             await session.close()
-            recent_sessions.appendleft(session.status())
 
     return app
 

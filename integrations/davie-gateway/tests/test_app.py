@@ -116,12 +116,13 @@ def test_admin_routes_require_the_separate_admin_token() -> None:
         assert client.get("/v1/sessions/recent").status_code == 401
 
 
-def test_closed_session_diagnostics_remain_available_without_raw_audio() -> None:
+def test_closed_session_diagnostics_remain_available_without_raw_audio(tmp_path) -> None:
     app = create_app(
         Settings(
             device_token="device-secret",
             davie_api_key="davie-secret",
             admin_token="admin-secret",
+            diagnostic_state_path=str(tmp_path / "diagnostics.json"),
         ),
         media_client=NullClient(),
         davie_client=NullClient(),
@@ -157,6 +158,164 @@ def test_closed_session_diagnostics_remain_available_without_raw_audio() -> None
     assert sessions[0]["close_reason"] == "connection_closed"
     assert "audio" not in sessions[0]
     assert health.json()["recent_sessions"] == 1
+    assert health.json()["device_runtime_status"] == "no_device"
+    assert health.json()["gateway_healthy"] is True
+
+
+def test_health_separates_gateway_device_handshake_and_audio_truth(tmp_path) -> None:
+    app = create_app(
+        Settings(
+            device_token="device-secret",
+            davie_api_key="davie-secret",
+            admin_token="admin-secret",
+            diagnostic_state_path=str(tmp_path / "diagnostics.json"),
+        ),
+        media_client=NullClient(),
+        davie_client=NullClient(),
+        codec_factory=NullCodec,
+    )
+    with TestClient(app) as client:
+        initial = client.get("/health").json()
+        assert initial["gateway_healthy"] is True
+        assert initial["service_healthy"] is True
+        assert initial["device_runtime_status"] == "no_device"
+        assert initial["device_connected"] is False
+        assert initial["last_seen_at"] is None
+
+        with client.websocket_connect(
+            "/xiaozhi/v1/",
+            headers={
+                "Authorization": "Bearer device-secret",
+                "Device-Id": "stackchan-truth",
+                "Client-Id": "truth-client",
+            },
+        ) as websocket:
+            connected = client.get("/health").json()
+            assert connected["device_runtime_status"] == "connected_no_audio"
+            assert connected["device_connected"] is True
+            assert connected["handshake_complete_devices"] == 0
+            assert connected["audio_flowing_devices"] == 0
+            assert connected["last_seen_at"] is not None
+
+            websocket.send_text(
+                '{"type":"hello","version":1,"transport":"websocket",'
+                '"features":{"mcp":false},"audio_params":{"format":"opus",'
+                '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+            )
+            assert websocket.receive_json()["type"] == "hello"
+            handshaken = client.get("/health").json()
+            assert handshaken["handshake_complete_devices"] == 1
+            assert handshaken["identified_devices"] == 0
+            assert handshaken["device_runtime_status"] == "connected_no_audio"
+
+        diagnostics = client.get(
+            "/v1/diagnostics",
+            headers={"Authorization": "Bearer admin-secret"},
+        )
+        assert diagnostics.status_code == 200
+        assert diagnostics.json()["recent_sessions"][0]["device_id"] == "stackchan-truth"
+
+
+def test_device_diagnostics_require_admin_and_survive_app_restart(tmp_path) -> None:
+    path = tmp_path / "diagnostics.json"
+    settings = Settings(
+        device_token="device-secret",
+        davie_api_key="davie-secret",
+        admin_token="admin-secret",
+        diagnostic_state_path=str(path),
+    )
+    with TestClient(
+        create_app(
+            settings,
+            media_client=NullClient(),
+            davie_client=NullClient(),
+            codec_factory=NullCodec,
+        )
+    ) as client:
+        with client.websocket_connect(
+            "/xiaozhi/v1/",
+            headers={
+                "Authorization": "Bearer device-secret",
+                "Device-Id": "stackchan-restart",
+                "Client-Id": "restart-client",
+            },
+        ) as websocket:
+            websocket.send_text(
+                '{"type":"hello","version":1,"transport":"websocket",'
+                '"features":{"mcp":false},"audio_params":{"format":"opus",'
+                '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+            )
+            assert websocket.receive_json()["type"] == "hello"
+
+    with TestClient(
+        create_app(
+            settings,
+            media_client=NullClient(),
+            davie_client=NullClient(),
+            codec_factory=NullCodec,
+        )
+    ) as restarted:
+        assert (
+            restarted.get("/v1/devices/stackchan-restart/diagnostics").status_code
+            == 401
+        )
+        response = restarted.get(
+            "/v1/devices/stackchan-restart/diagnostics",
+            headers={"Authorization": "Bearer admin-secret"},
+        )
+        health = restarted.get("/health").json()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["known"] is True
+    assert payload["history"]["connection_count"] == 1
+    assert payload["recent_sessions"][0]["close_reason"] == "connection_closed"
+    assert health["recent_sessions"] == 1
+
+
+def test_twenty_reconnect_cycles_preserve_identity_and_bounded_history(tmp_path) -> None:
+    app = create_app(
+        Settings(
+            device_token="device-secret",
+            davie_api_key="davie-secret",
+            admin_token="admin-secret",
+            diagnostic_state_path=str(tmp_path / "diagnostics.json"),
+            recent_session_limit=8,
+        ),
+        media_client=NullClient(),
+        davie_client=NullClient(),
+        codec_factory=NullCodec,
+    )
+    with TestClient(app) as client:
+        for cycle in range(20):
+            with client.websocket_connect(
+                "/xiaozhi/v1/",
+                headers={
+                    "Authorization": "Bearer device-secret",
+                    "Device-Id": "stackchan-cycle",
+                    "Client-Id": f"cycle-client-{cycle}",
+                },
+            ) as websocket:
+                websocket.send_text(
+                    '{"type":"hello","version":1,"transport":"websocket",'
+                    '"features":{"mcp":false},"audio_params":{"format":"opus",'
+                    '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+                )
+                assert websocket.receive_json()["type"] == "hello"
+
+        response = client.get(
+            "/v1/devices/stackchan-cycle/diagnostics",
+            headers={"Authorization": "Bearer admin-secret"},
+        )
+        health = client.get("/health").json()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["history"]["connection_count"] == 20
+    assert payload["history"]["reconnect_count"] == 19
+    assert len(payload["recent_sessions"]) == 8
+    assert health["connected_devices"] == 0
+    assert health["device_runtime_status"] == "no_device"
 
 
 def test_runtime_validation_fails_closed_without_credentials() -> None:

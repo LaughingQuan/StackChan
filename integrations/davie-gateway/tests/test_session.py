@@ -188,6 +188,46 @@ async def test_realtime_empty_transcript_keeps_listening_without_failure_alert()
     await session.close()
 
 
+async def test_diagnostic_audio_failure_never_interrupts_realtime_audio() -> None:
+    def failing_audio_sink(
+        _device_id: str,
+        _session_id: str,
+        _pcm: bytes,
+        _sample_rate: int,
+    ) -> None:
+        raise OSError("simulated diagnostic storage failure")
+
+    persisted_events: list[str] = []
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=FakeMedia(),
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+        diagnostic_sink=lambda stage, _status: persisted_events.append(stage),
+        diagnostic_audio_sink=failing_audio_sink,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+
+    await session.handle_binary(_pcm_frame(10))
+
+    assert session.audio_frames_received == 1
+    assert session.last_audio_received_at is not None
+    assert "audio_diagnostic_sink_failed" in persisted_events
+    assert any(
+        item["stage"] == "audio_diagnostic_sink_failed"
+        for item in session.diagnostic_status()["diagnostic_timeline"]
+    )
+    await session.close()
+
+
 async def test_first_auto_empty_transcript_stays_listening_then_repeated_empty_prompts() -> None:
     transport = FakeTransport()
     session = StackChanSession(
@@ -408,6 +448,207 @@ async def test_official_mcp_is_initialized_by_gateway_and_tools_are_discovered()
     assert session.mcp_initialized is True
     assert "self.get_device_status" in session.mcp_tools
     await session.close()
+
+
+async def test_device_attestation_is_loaded_after_mcp_discovery() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(
+            attestation_timeout_seconds=1,
+            expected_firmware_revision="p0revision12",
+            expected_firmware_sha256="a" * 64,
+        ),
+        media=FakeMedia(),
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":true},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    await session.handle_text(
+        '{"type":"mcp","payload":{"jsonrpc":"2.0","id":1,'
+        '"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}}'
+    )
+    await session.handle_text(
+        '{"type":"mcp","payload":{"jsonrpc":"2.0","id":2,'
+        '"result":{"tools":[{"name":"self.davie.get_attestation",'
+        '"description":"identity","inputSchema":{"type":"object"}}]}}}'
+    )
+    await asyncio.sleep(0)
+    request = transport.json[-1]["payload"]
+    assert request["method"] == "tools/call"
+    assert request["params"]["name"] == "self.davie.get_attestation"
+    attestation = {
+        "schema_version": 1,
+        "status": "ready",
+        "firmware": {
+            "project": "stack-chan",
+            "version": "1.4.3",
+            "source_revision": "p0revision12",
+            "elf_sha256": "a" * 64,
+        },
+        "audio": {"afe_enabled": True, "device_aec": True},
+        "wake": {"engine": "multinet", "display": "Davie"},
+    }
+    response = {
+        "type": "mcp",
+        "payload": {
+            "jsonrpc": "2.0",
+            "id": request["id"],
+            "result": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(attestation),
+                    }
+                ]
+            },
+        },
+    }
+    await session.handle_text(json.dumps(response))
+    assert session._attestation_task is not None
+    await asyncio.wait_for(session._attestation_task, timeout=1)
+
+    status = session.status()
+    assert status["attestation_state"] == "ready"
+    assert status["identity_verified"] is True
+    assert status["intended_firmware_verified"] is True
+    assert status["firmware_expectation_state"] == "matched"
+    assert status["device_attestation"]["firmware"]["version"] == "1.4.3"
+    assert any(
+        item["stage"] == "attestation_ready"
+        for item in status["diagnostic_timeline"]
+    )
+    await session.close()
+
+
+async def test_missing_attestation_tool_is_explicitly_unavailable() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(),
+        media=FakeMedia(),
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":true},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    await session.handle_text(
+        '{"type":"mcp","payload":{"jsonrpc":"2.0","id":1,'
+        '"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}}}}}'
+    )
+    await session.handle_text(
+        '{"type":"mcp","payload":{"jsonrpc":"2.0","id":2,'
+        '"result":{"tools":[{"name":"self.get_device_status",'
+        '"description":"status","inputSchema":{"type":"object"}}]}}}'
+    )
+
+    status = session.status()
+    assert status["attestation_state"] == "unavailable"
+    assert status["identity_verified"] is False
+    assert status["attestation_error"] == "device_attestation_tool_unavailable"
+    await session.close()
+
+
+async def test_audio_flow_truth_changes_from_not_started_to_flowing_to_stale() -> None:
+    transport = FakeTransport()
+    session = StackChanSession(
+        transport=transport,
+        settings=Settings(audio_flow_stale_seconds=0.01),
+        media=FakeMedia(),
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    await session.handle_text(
+        '{"type":"hello","version":1,"transport":"websocket",'
+        '"features":{"mcp":false},"audio_params":{"format":"opus",'
+        '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+    )
+    assert session.status()["audio_input_state"] == "not_started"
+
+    await session.handle_binary(_pcm_frame(10))
+    assert session.status()["audio_flowing"] is True
+    assert session.status()["audio_input_state"] == "flowing"
+
+    await asyncio.sleep(0.02)
+    assert session.status()["audio_flowing"] is False
+    assert session.status()["audio_input_state"] == "stale"
+    await session.close()
+
+
+def test_attestation_rejects_credentials_and_invalid_firmware_identity() -> None:
+    valid = {
+        "schema_version": 1,
+        "status": "ready",
+        "firmware": {"version": "1.0", "elf_sha256": "b" * 64},
+    }
+    StackChanSession._validate_device_attestation(valid)
+
+    invalid_secret = {
+        **valid,
+        "network": {"ssid": "private"},
+    }
+    try:
+        StackChanSession._validate_device_attestation(invalid_secret)
+        raise AssertionError("SSID must be rejected")
+    except ValueError as exc:
+        assert str(exc) == "device_attestation_contains_forbidden_field"
+
+    invalid_hash = {
+        **valid,
+        "firmware": {"version": "1.0", "elf_sha256": "short"},
+    }
+    try:
+        StackChanSession._validate_device_attestation(invalid_hash)
+        raise AssertionError("invalid firmware hash must be rejected")
+    except ValueError as exc:
+        assert str(exc) == "device_attestation_invalid_firmware_identity"
+
+
+def test_expected_firmware_requires_project_version_and_configured_hash() -> None:
+    session = StackChanSession(
+        transport=FakeTransport(),
+        settings=Settings(
+            expected_firmware_revision="p0revision12",
+            expected_firmware_sha256="c" * 64,
+        ),
+        media=FakeMedia(),
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    session.attestation_state = "ready"
+    session.device_attestation = {
+        "schema_version": 1,
+        "status": "ready",
+        "firmware": {
+            "project": "stack-chan",
+            "version": "1.4.3",
+            "source_revision": "p0revision12",
+            "elf_sha256": "c" * 64,
+        },
+    }
+
+    assert session.identity_verified is True
+    assert session.firmware_expectation_state == "matched"
+    assert session.intended_firmware_verified is True
+
+    session.device_attestation["firmware"]["source_revision"] = "other"
+    assert session.firmware_expectation_state == "mismatch"
+    assert session.intended_firmware_verified is False
 
 
 async def test_device_tool_call_round_trip() -> None:
