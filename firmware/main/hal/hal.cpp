@@ -131,6 +131,7 @@ void Hal::updateHeapStatusLog()
 /*                                   Xiaozhi                                  */
 /* -------------------------------------------------------------------------- */
 #include "board/hal_bridge.h"
+#include "davie_device_heartbeat.h"
 #include <stackchan/stackchan.h>
 #include <apps/common/common.h>
 #include <assets/assets.h>
@@ -200,6 +201,7 @@ void Hal::startXiaozhi()
     xTaskCreatePinnedToCore(_stackchan_update_task, "stackchan", 4096, NULL, 3, NULL, 1);
 
     hal_bridge::start_xiaozhi_app();
+    davie::device::StartHeartbeat();
 }
 
 XiaozhiConfig_t Hal::getXiaozhiConfig()

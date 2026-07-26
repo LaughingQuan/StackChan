@@ -130,6 +130,20 @@ def create_app(
     @app.get("/health")
     async def health() -> dict[str, Any]:
         active_statuses = [session.diagnostic_status() for session in sessions.values()]
+        heartbeat_snapshot = diagnostics.heartbeat_snapshot(
+            stale_seconds=config.heartbeat_stale_seconds
+        )
+        fresh_heartbeats = heartbeat_snapshot["fresh"]
+        active_device_ids = {
+            str(status.get("device_id") or "").lower()
+            for status in active_statuses
+            if status.get("device_id")
+        }
+        heartbeat_only = [
+            heartbeat
+            for heartbeat in fresh_heartbeats
+            if heartbeat["device_id"] not in active_device_ids
+        ]
         flowing_count = sum(
             1 for status in active_statuses if status["audio_flowing"]
         )
@@ -145,15 +159,21 @@ def create_app(
             if status["intended_firmware_verified"]
         )
         last_seen_at = max(
-            (
+            [
                 float(status["last_activity_at"])
                 for status in active_statuses
                 if status.get("last_activity_at") is not None
-            ),
+            ]
+            + [
+                float(heartbeat["last_heartbeat_at"])
+                for heartbeat in fresh_heartbeats
+            ],
             default=None,
         )
         if not active_statuses:
-            device_runtime_status = "no_device"
+            device_runtime_status = (
+                "idle_ready" if fresh_heartbeats else "no_device"
+            )
         elif flowing_count:
             device_runtime_status = "audio_flowing"
         else:
@@ -175,6 +195,18 @@ def create_app(
             degraded_reasons.append(
                 "firmware_expectation:" + ",".join(firmware_states or ["unknown"])
             )
+        heartbeat_firmware_states = sorted(
+            {
+                heartbeat["firmware_expectation_state"]
+                for heartbeat in heartbeat_only
+                if not heartbeat["intended_firmware_verified"]
+            }
+        )
+        if heartbeat_firmware_states:
+            degraded_reasons.append(
+                "heartbeat_firmware_expectation:"
+                + ",".join(heartbeat_firmware_states)
+            )
         diagnostic_snapshot = diagnostics.snapshot()
         audio_diagnostic_snapshot = audio_diagnostics.snapshot()
         return {
@@ -186,13 +218,28 @@ def create_app(
             "version": __version__,
             "device_runtime_status": device_runtime_status,
             "device_connected": bool(active_statuses),
+            "device_reachable": bool(active_statuses or fresh_heartbeats),
+            "active_voice_sessions": len(active_statuses),
+            "heartbeat_ready_devices": len(fresh_heartbeats),
             "connected_devices": len(active_statuses),
             "handshake_complete_devices": handshake_count,
             "identified_devices": identified_count,
-            "intended_firmware_devices": intended_firmware_count,
+            "intended_firmware_devices": intended_firmware_count
+            + sum(
+                1
+                for heartbeat in heartbeat_only
+                if heartbeat["intended_firmware_verified"]
+            ),
             "audio_flowing_devices": flowing_count,
             "last_seen_at": last_seen_at,
             "recent_sessions": len(diagnostic_snapshot["recent_sessions"]),
+            "heartbeat": {
+                "interval_seconds": config.heartbeat_interval_seconds,
+                "stale_seconds": config.heartbeat_stale_seconds,
+                "fresh_count": heartbeat_snapshot["fresh_count"],
+                "stale_count": heartbeat_snapshot["stale_count"],
+                "last_heartbeat_at": heartbeat_snapshot["last_heartbeat_at"],
+            },
             "diagnostic_persistence": {
                 "enabled": diagnostics.persistent,
                 "load_error": diagnostics.load_error,
@@ -219,7 +266,13 @@ def create_app(
 
     @app.api_route("/xiaozhi/ota/", methods=["GET", "POST"])
     async def ota_bootstrap(_request: Request) -> dict[str, Any]:
-        websocket: dict[str, Any] = {"url": config.websocket_url, "version": 1}
+        websocket: dict[str, Any] = {
+            "url": config.websocket_url,
+            "version": 1,
+            "heartbeat_url": config.heartbeat_url,
+            # ESP-IDF NVS keys are limited to 15 characters.
+            "heartbeat_sec": config.heartbeat_interval_seconds,
+        }
         if config.device_token:
             websocket["token"] = config.device_token
         return {
@@ -228,6 +281,45 @@ def create_app(
                 "timestamp": int(time.time() * 1000),
                 "timezone_offset": 480,
             },
+        }
+
+    @app.post("/v1/device-heartbeat")
+    async def device_heartbeat(
+        attestation: dict[str, Any],
+        authorization: str | None = Header(default=None),
+        device_id: str | None = Header(default=None, alias="Device-Id"),
+        client_id: str | None = Header(default=None, alias="Client-Id"),
+    ) -> dict[str, Any]:
+        require_device(authorization)
+        normalized_device_id = str(device_id or "").lower()
+        normalized_client_id = str(client_id or "").lower()
+        if not DEVICE_ID_PATTERN.fullmatch(
+            normalized_device_id
+        ) or not DEVICE_ID_PATTERN.fullmatch(normalized_client_id):
+            raise HTTPException(status_code=422, detail="invalid device identity")
+        try:
+            StackChanSession._validate_device_attestation(attestation)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        firmware_state = StackChanSession.evaluate_firmware_expectation(
+            config,
+            attestation,
+            identity_verified=True,
+        )
+        device = diagnostics.record_heartbeat(
+            device_id=normalized_device_id,
+            client_id=normalized_client_id,
+            attestation=attestation,
+            firmware_expectation_state=firmware_state,
+            intended_firmware_verified=firmware_state == "matched",
+        )
+        return {
+            "status": "ok",
+            "device_id": normalized_device_id,
+            "heartbeat_count": device["heartbeat_count"],
+            "received_at": device["last_heartbeat_at"],
+            "firmware_expectation_state": firmware_state,
+            "intended_firmware_verified": firmware_state == "matched",
         }
 
     @app.get("/v1/devices")

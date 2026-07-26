@@ -19,6 +19,7 @@ file(GLOB_RECURSE STACK_CHAN_SOURCES
 # cannot silently omit it before CMake has refreshed the recursive glob.
 list(APPEND STACK_CHAN_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/audio/davie_post_wake_audio_bridge.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hal/davie_device_heartbeat.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/hal/board/davie_device_attestation.cc"
 )
 list(REMOVE_DUPLICATES STACK_CHAN_SOURCES)

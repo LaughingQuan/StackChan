@@ -12,6 +12,12 @@
 #   make test-firmware 只跑固件 C++
 
 GATEWAY_DIR := integrations/davie-gateway
+GO ?= go
+IDF_CMAKE := $(lastword $(sort \
+	$(wildcard $(HOME)/.espressif/tools/cmake/*/bin/cmake) \
+	$(wildcard $(HOME)/.espressif/python_env/idf*_env/bin/cmake)))
+CMAKE ?= $(if $(IDF_CMAKE),$(IDF_CMAKE),cmake)
+CTEST ?= $(if $(IDF_CMAKE),$(dir $(IDF_CMAKE))ctest,ctest)
 
 .PHONY: test test-gateway test-server test-firmware
 
@@ -27,17 +33,27 @@ test-gateway:
 
 test-server:
 	@echo "=== 服务端（Go）==="
-	@if [ ! -d server ]; then echo "  无 server/ 目录"; \
-	elif ! command -v go >/dev/null 2>&1; then \
-		echo "  ⚠ server/ 存在但本机未装 go —— 这些测试没跑，不是没有" >&2; \
-	else cd server && go test ./...; fi
+	@if [ ! -d server ]; then \
+		echo "  无 server/ 目录"; \
+	elif ! command -v "$(GO)" >/dev/null 2>&1; then \
+		echo "  ✗ server/ 存在但找不到 GO=$(GO) —— 拒绝把未验证当成通过" >&2; \
+		exit 1; \
+	else \
+		cd server && "$(GO)" test ./...; \
+	fi
 
 test-firmware:
 	@echo "=== 固件（C++）==="
-	@if [ ! -d firmware/tests ]; then echo "  无 firmware/tests 目录"; \
-	elif ! command -v cmake >/dev/null 2>&1; then \
-		echo "  ⚠ firmware/tests 存在（5 个用例）但本机未装 cmake —— 没跑，不是没有" >&2; \
+	@if [ ! -d firmware/tests ]; then \
+		echo "  无 firmware/tests 目录"; \
+	elif ! command -v "$(CMAKE)" >/dev/null 2>&1; then \
+		echo "  ✗ firmware/tests 存在但找不到 CMAKE=$(CMAKE) —— 拒绝把未验证当成通过" >&2; \
+		exit 1; \
+	elif ! command -v "$(CTEST)" >/dev/null 2>&1; then \
+		echo "  ✗ firmware/tests 存在但找不到 CTEST=$(CTEST) —— 拒绝把未验证当成通过" >&2; \
+		exit 1; \
 	else \
-		cmake -S firmware/tests -B build/firmware-tests >/dev/null && \
-		cmake --build build/firmware-tests >/dev/null && \
-		ctest --test-dir build/firmware-tests --output-on-failure; fi
+		"$(CMAKE)" -S firmware/tests -B build/firmware-tests >/dev/null && \
+		"$(CMAKE)" --build build/firmware-tests >/dev/null && \
+		"$(CTEST)" --test-dir build/firmware-tests --output-on-failure; \
+	fi

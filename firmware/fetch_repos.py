@@ -29,7 +29,9 @@ def clone_or_update_repo(
             if os.path.isabs(patch_path)
             else os.path.join(os.getcwd(), patch_path)
         )
-        # 使用 git apply --check 先检测补丁是否能应用，避免报错
+        # A skipped patch produces a stock firmware that can still compile,
+        # which is more dangerous than a hard failure. Refuse to continue
+        # unless the pinned upstream source accepts the complete local patch.
         check_result = subprocess.run(
             ["git", "-C", path, "apply", "--check", patch_full_path]
         )
@@ -37,7 +39,9 @@ def clone_or_update_repo(
             subprocess.run(["git", "-C", path, "apply", patch_full_path], check=True)
             print(f"Applied patch {patch_path} to {path}")
         else:
-            print(f"Patch {patch_path} cannot be applied cleanly to {path}, skipped.")
+            raise RuntimeError(
+                f"Patch {patch_path} cannot be applied cleanly to {path}"
+            )
 
 
 def fetch_dependencies():

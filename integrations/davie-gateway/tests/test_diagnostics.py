@@ -118,3 +118,55 @@ def test_late_close_from_replaced_session_does_not_overwrite_current_device(tmp_
     assert device["last_session_id"] == "session-current"
     assert device["last_state"] == "ready"
     assert device["audio_flowing"] is True
+
+
+def test_heartbeat_is_persistent_bounded_and_has_fresh_stale_truth(tmp_path) -> None:
+    path = tmp_path / "diagnostics.json"
+    store = DiagnosticStore(path)
+    attestation = {
+        "schema_version": 1,
+        "status": "ready",
+        "firmware": {
+            "project": "stack-chan",
+            "version": "1.4.3",
+            "elf_sha256": "a" * 64,
+        },
+        "network": {
+            "wifi_connected": True,
+            "ssid": "must-not-persist",
+        },
+    }
+    first = store.record_heartbeat(
+        device_id="STACKCHAN-1",
+        client_id="CLIENT-1",
+        attestation=attestation,
+        firmware_expectation_state="matched",
+        intended_firmware_verified=True,
+        now=100.0,
+    )
+    second = store.record_heartbeat(
+        device_id="stackchan-1",
+        client_id="client-1",
+        attestation=attestation,
+        firmware_expectation_state="matched",
+        intended_firmware_verified=True,
+        now=130.0,
+    )
+
+    assert first["heartbeat_count"] == 1
+    assert second["heartbeat_count"] == 2
+    assert "must-not-persist" not in path.read_text(encoding="utf-8")
+    fresh = store.heartbeat_snapshot(stale_seconds=75, now=200.0)
+    assert fresh["fresh_count"] == 1
+    assert fresh["stale_count"] == 0
+    assert fresh["fresh"][0]["device_id"] == "stackchan-1"
+    assert fresh["fresh"][0]["heartbeat_count"] == 2
+
+    stale = store.heartbeat_snapshot(stale_seconds=75, now=206.0)
+    assert stale["fresh_count"] == 0
+    assert stale["stale_count"] == 1
+
+    restarted = DiagnosticStore(path)
+    persisted = restarted.heartbeat_snapshot(stale_seconds=75, now=200.0)
+    assert persisted["fresh_count"] == 1
+    assert persisted["fresh"][0]["intended_firmware_verified"] is True

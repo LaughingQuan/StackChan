@@ -38,6 +38,25 @@ class VisionDavie(NullClient):
         return DavieReply("I can see a blue cup.", session_id or "vision-session-1")
 
 
+def _valid_attestation(
+    *,
+    revision: str = "p8revision12",
+    elf_sha256: str = "a" * 64,
+) -> dict:
+    return {
+        "schema_version": 1,
+        "status": "ready",
+        "firmware": {
+            "project": "stack-chan",
+            "version": "1.4.3",
+            "source_revision": revision,
+            "elf_sha256": elf_sha256,
+        },
+        "audio": {"afe_enabled": True, "device_aec": True},
+        "wake": {"engine": "multinet_async", "display": "Davie"},
+    }
+
+
 def test_ota_bootstrap_points_to_local_gateway_without_firmware_update() -> None:
     app = create_app(
         Settings(
@@ -60,7 +79,155 @@ def test_ota_bootstrap_points_to_local_gateway_without_firmware_update() -> None
         )
         assert payload["websocket"]["version"] == 1
         assert payload["websocket"]["token"] == "test-token"
+        assert (
+            payload["websocket"]["heartbeat_url"]
+            == "http://stackchan-gateway.test:8793/v1/device-heartbeat"
+        )
+        assert payload["websocket"]["heartbeat_sec"] == 30
         assert "firmware" not in payload
+
+
+def test_device_heartbeat_requires_auth_identity_and_valid_attestation(
+    tmp_path,
+) -> None:
+    settings = Settings(
+        device_token="device-secret",
+        davie_api_key="davie-secret",
+        admin_token="admin-secret",
+        diagnostic_state_path=str(tmp_path / "diagnostics.json"),
+        expected_firmware_revision="p8revision12",
+        expected_firmware_sha256="a" * 64,
+    )
+    app = create_app(
+        settings,
+        media_client=NullClient(),
+        davie_client=NullClient(),
+    )
+    headers = {
+        "Authorization": "Bearer device-secret",
+        "Device-Id": "1C:DB:D4:BA:5B:08",
+        "Client-Id": "STACKCHAN-P8",
+    }
+    with TestClient(app) as client:
+        assert (
+            client.post(
+                "/v1/device-heartbeat",
+                json=_valid_attestation(),
+            ).status_code
+            == 401
+        )
+        invalid_identity = client.post(
+            "/v1/device-heartbeat",
+            headers={**headers, "Device-Id": "bad identity"},
+            json=_valid_attestation(),
+        )
+        assert invalid_identity.status_code == 422
+        invalid_attestation = client.post(
+            "/v1/device-heartbeat",
+            headers=headers,
+            json={"status": "not-ready"},
+        )
+        assert invalid_attestation.status_code == 422
+
+        response = client.post(
+            "/v1/device-heartbeat",
+            headers=headers,
+            json=_valid_attestation(),
+        )
+        health = client.get("/health").json()
+
+    assert response.status_code == 200
+    assert response.json()["device_id"] == "1c:db:d4:ba:5b:08"
+    assert response.json()["heartbeat_count"] == 1
+    assert response.json()["firmware_expectation_state"] == "matched"
+    assert response.json()["intended_firmware_verified"] is True
+    assert health["device_runtime_status"] == "idle_ready"
+    assert health["device_connected"] is False
+    assert health["device_reachable"] is True
+    assert health["active_voice_sessions"] == 0
+    assert health["heartbeat_ready_devices"] == 1
+    assert health["intended_firmware_devices"] == 1
+    assert health["last_seen_at"] is not None
+
+
+def test_active_voice_session_takes_precedence_without_double_counting_heartbeat(
+    tmp_path,
+) -> None:
+    settings = Settings(
+        device_token="device-secret",
+        davie_api_key="davie-secret",
+        admin_token="admin-secret",
+        diagnostic_state_path=str(tmp_path / "diagnostics.json"),
+        expected_firmware_revision="p8revision12",
+        expected_firmware_sha256="a" * 64,
+    )
+    app = create_app(
+        settings,
+        media_client=NullClient(),
+        davie_client=NullClient(),
+        codec_factory=NullCodec,
+    )
+    headers = {
+        "Authorization": "Bearer device-secret",
+        "Device-Id": "stackchan-p8",
+        "Client-Id": "stackchan-p8-client",
+    }
+    with TestClient(app) as client:
+        assert client.post(
+            "/v1/device-heartbeat",
+            headers=headers,
+            json=_valid_attestation(),
+        ).status_code == 200
+        with client.websocket_connect(
+            "/xiaozhi/v1/",
+            headers=headers,
+        ):
+            health = client.get("/health").json()
+
+    assert health["device_runtime_status"] == "connected_no_audio"
+    assert health["device_connected"] is True
+    assert health["device_reachable"] is True
+    assert health["active_voice_sessions"] == 1
+    assert health["heartbeat_ready_devices"] == 1
+    assert health["connected_devices"] == 1
+
+
+def test_mismatched_idle_heartbeat_degrades_without_marking_gateway_unhealthy(
+    tmp_path,
+) -> None:
+    app = create_app(
+        Settings(
+            device_token="device-secret",
+            davie_api_key="davie-secret",
+            admin_token="admin-secret",
+            diagnostic_state_path=str(tmp_path / "diagnostics.json"),
+            expected_firmware_revision="expected-rev",
+            expected_firmware_sha256="a" * 64,
+        ),
+        media_client=NullClient(),
+        davie_client=NullClient(),
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/device-heartbeat",
+            headers={
+                "Authorization": "Bearer device-secret",
+                "Device-Id": "stackchan-mismatch",
+                "Client-Id": "mismatch-client",
+            },
+            json=_valid_attestation(revision="different-rev"),
+        )
+        health = client.get("/health").json()
+
+    assert response.status_code == 200
+    assert response.json()["firmware_expectation_state"] == "mismatch"
+    assert health["status"] == "degraded"
+    assert health["gateway_healthy"] is True
+    assert health["service_healthy"] is True
+    assert health["device_runtime_status"] == "idle_ready"
+    assert health["degraded_reasons"] == [
+        "heartbeat_firmware_expectation:mismatch"
+    ]
 
 
 def test_health_never_returns_secret_values() -> None:

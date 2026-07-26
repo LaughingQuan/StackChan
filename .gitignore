@@ -8,6 +8,7 @@ __pycache__/
 .venv/
 
 # ESP-IDF generated and machine-local state
+/build/
 firmware/build*/
 firmware/components/
 firmware/managed_components/

@@ -51,6 +51,8 @@ class Settings:
     audio_diagnostic_nas_root: str = ""
     audio_diagnostic_recent_limit: int = 20
     audio_flow_stale_seconds: float = 2.0
+    heartbeat_interval_seconds: int = 30
+    heartbeat_stale_seconds: float = 75.0
     attestation_timeout_seconds: float = 8.0
     expected_firmware_project: str = "stack-chan"
     expected_firmware_version: str = "1.4.3"
@@ -64,6 +66,10 @@ class Settings:
     @property
     def vision_explain_url(self) -> str:
         return f"http://{self.public_host}:{self.port}/v1/vision/explain"
+
+    @property
+    def heartbeat_url(self) -> str:
+        return f"http://{self.public_host}:{self.port}/v1/device-heartbeat"
 
     def validate_runtime(self) -> None:
         if self.allow_insecure:
@@ -156,6 +162,14 @@ class Settings:
             ),
             audio_flow_stale_seconds=float(
                 os.environ.get("STACKCHAN_AUDIO_FLOW_STALE_SECONDS", "2")
+            ),
+            heartbeat_interval_seconds=max(
+                10,
+                int(os.environ.get("STACKCHAN_HEARTBEAT_INTERVAL_SECONDS", "30")),
+            ),
+            heartbeat_stale_seconds=max(
+                20.0,
+                float(os.environ.get("STACKCHAN_HEARTBEAT_STALE_SECONDS", "75")),
             ),
             attestation_timeout_seconds=float(
                 os.environ.get("STACKCHAN_ATTESTATION_TIMEOUT_SECONDS", "8")

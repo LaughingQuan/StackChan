@@ -244,6 +244,102 @@ class DiagnosticStore:
             self._data["updated_at"] = now
             self._write_locked()
 
+    def record_heartbeat(
+        self,
+        *,
+        device_id: str,
+        client_id: str,
+        attestation: dict[str, Any],
+        firmware_expectation_state: str,
+        intended_firmware_verified: bool,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        device_id = device_id.lower()
+        client_id = client_id.lower()
+        if not device_id or not client_id:
+            raise ValueError("invalid_device_identity")
+
+        received_at = time.time() if now is None else float(now)
+        safe_attestation = _safe_value(attestation)
+        with self._lock:
+            devices = self._data["devices"]
+            device = devices.get(device_id)
+            if not isinstance(device, dict):
+                device = {
+                    "device_id": device_id,
+                    "connection_count": 0,
+                    "reconnect_count": 0,
+                }
+                devices[device_id] = device
+            device.update(
+                {
+                    "last_client_id": client_id,
+                    "last_event": "heartbeat",
+                    "last_event_at": received_at,
+                    "last_heartbeat_at": received_at,
+                    "heartbeat_count": int(device.get("heartbeat_count") or 0) + 1,
+                    "last_attestation": safe_attestation,
+                    "firmware_expectation_state": str(
+                        firmware_expectation_state
+                    )[:80],
+                    "intended_firmware_verified": bool(
+                        intended_firmware_verified
+                    ),
+                }
+            )
+            self._data["updated_at"] = received_at
+            self._write_locked()
+            return deepcopy(device)
+
+    def heartbeat_snapshot(
+        self,
+        *,
+        stale_seconds: float,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        observed_at = time.time() if now is None else float(now)
+        cutoff = observed_at - max(1.0, float(stale_seconds))
+        with self._lock:
+            devices = deepcopy(self._data["devices"])
+
+        fresh: list[dict[str, Any]] = []
+        stale: list[dict[str, Any]] = []
+        for device in devices.values():
+            if not isinstance(device, dict):
+                continue
+            last_heartbeat_at = device.get("last_heartbeat_at")
+            if not isinstance(last_heartbeat_at, (int, float)):
+                continue
+            summary = {
+                "device_id": str(device.get("device_id") or ""),
+                "client_id": str(device.get("last_client_id") or ""),
+                "last_heartbeat_at": float(last_heartbeat_at),
+                "heartbeat_count": int(device.get("heartbeat_count") or 0),
+                "firmware_expectation_state": str(
+                    device.get("firmware_expectation_state") or "unknown"
+                ),
+                "intended_firmware_verified": bool(
+                    device.get("intended_firmware_verified")
+                ),
+            }
+            (fresh if last_heartbeat_at >= cutoff else stale).append(summary)
+
+        fresh.sort(key=lambda item: item["last_heartbeat_at"], reverse=True)
+        stale.sort(key=lambda item: item["last_heartbeat_at"], reverse=True)
+        return {
+            "observed_at": observed_at,
+            "stale_seconds": max(1.0, float(stale_seconds)),
+            "fresh": fresh,
+            "stale": stale,
+            "fresh_count": len(fresh),
+            "stale_count": len(stale),
+            "last_heartbeat_at": (
+                fresh[0]["last_heartbeat_at"]
+                if fresh
+                else (stale[0]["last_heartbeat_at"] if stale else None)
+            ),
+        }
+
     def snapshot(self, *, active_sessions: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         with self._lock:
             payload = deepcopy(self._data)

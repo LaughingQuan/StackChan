@@ -3,76 +3,106 @@
 #include <cassert>
 
 using davie::audio::DavieWakeInferenceGate;
+using davie::audio::kWakeInferenceEndSilenceFrames;
 using davie::audio::kWakeInferenceMaxSpeechFrames;
+using davie::audio::kWakeInferenceMinimumRms;
+using davie::audio::kWakeInferenceRearmQuietFrames;
 
 int main()
 {
     DavieWakeInferenceGate gate;
 
-    auto decision = gate.OnFrame(false, false);
+    auto decision = gate.OnFrame(20);
     assert(!decision.process_frame);
-    assert(!decision.reset_model);
+    assert(!decision.starts_segment);
+    assert(decision.threshold_rms == kWakeInferenceMinimumRms);
 
-    decision = gate.OnFrame(true, true);
+    for (int frame = 0; frame < 100; ++frame) {
+        decision = gate.OnFrame(25);
+        assert(!decision.starts_segment);
+        assert(!decision.process_frame);
+    }
+    assert(gate.NoiseFloorRms() > 24.0f);
+
+    // A single impulse is not enough to create a wake candidate.
+    decision = gate.OnFrame(1200);
+    assert(!decision.starts_segment);
+    decision = gate.OnFrame(25);
+    assert(!decision.starts_segment);
+
+    // Two consecutive voiced frames open one candidate and flush pre-roll.
+    decision = gate.OnFrame(1200);
+    assert(!decision.starts_segment);
+    decision = gate.OnFrame(1200);
     assert(decision.starts_segment);
-    assert(decision.prepend_vad_cache);
-    assert(decision.process_frame);
+    assert(decision.flush_pre_roll);
+    assert(!decision.process_frame);
     assert(!decision.ends_segment);
-    assert(!decision.reset_model);
     assert(gate.IsSpeechActive());
 
-    decision = gate.OnFrame(true, true);
+    decision = gate.OnFrame(1200);
     assert(!decision.starts_segment);
-    assert(!decision.prepend_vad_cache);
+    assert(!decision.flush_pre_roll);
     assert(decision.process_frame);
-    assert(!decision.reset_model);
 
-    decision = gate.OnFrame(false, false);
+    for (std::size_t frame = 1;
+         frame < kWakeInferenceEndSilenceFrames;
+         ++frame) {
+        decision = gate.OnFrame(20);
+        assert(decision.process_frame);
+        assert(!decision.ends_segment);
+    }
+    decision = gate.OnFrame(20);
     assert(decision.process_frame);
     assert(decision.ends_segment);
-    assert(decision.reset_model);
     assert(!gate.IsSpeechActive());
 
-    decision = gate.OnFrame(false, false);
+    decision = gate.OnFrame(20);
     assert(!decision.process_frame);
-    assert(!decision.reset_model);
 
     gate.Reset();
-    for (std::size_t frame = 0; frame < kWakeInferenceMaxSpeechFrames; ++frame) {
-        decision = gate.OnFrame(true, frame == 0);
+    decision = gate.OnFrame(1000);
+    assert(!decision.starts_segment);
+    decision = gate.OnFrame(1000);
+    assert(decision.starts_segment);
+    for (std::size_t frame = 2;
+         frame < kWakeInferenceMaxSpeechFrames;
+         ++frame) {
+        decision = gate.OnFrame(1000);
         assert(decision.process_frame);
-        assert(!decision.reset_model);
+        assert(decision.ends_segment ==
+               (frame + 1 == kWakeInferenceMaxSpeechFrames));
     }
-    decision = gate.OnFrame(true, false);
-    assert(!decision.process_frame);
-    assert(decision.ends_segment);
-    assert(decision.reset_model);
+    assert(!gate.IsSpeechActive());
     assert(gate.IsSuppressed());
 
-    decision = gate.OnFrame(true, false);
-    assert(!decision.process_frame);
-    assert(!decision.reset_model);
-
-    decision = gate.OnFrame(false, false);
-    assert(!decision.process_frame);
-    assert(!decision.reset_model);
+    // Sustained loud ambient audio must produce only one bounded candidate.
+    for (std::size_t frame = 0;
+         frame < kWakeInferenceMaxSpeechFrames * 2;
+         ++frame) {
+        decision = gate.OnFrame(1000);
+        assert(!decision.starts_segment);
+        assert(!decision.process_frame);
+        assert(!decision.ends_segment);
+    }
+    for (std::size_t frame = 1;
+         frame < kWakeInferenceRearmQuietFrames;
+         ++frame) {
+        decision = gate.OnFrame(20);
+        assert(gate.IsSuppressed());
+    }
+    decision = gate.OnFrame(20);
     assert(!gate.IsSuppressed());
-
-    decision = gate.OnFrame(true, true);
-    assert(decision.prepend_vad_cache);
-    assert(decision.process_frame);
-
-    gate.SuppressUntilSilence();
-    assert(gate.IsSuppressed());
-    decision = gate.OnFrame(true, false);
-    assert(!decision.process_frame);
-    decision = gate.OnFrame(false, false);
-    assert(!gate.IsSuppressed());
+    decision = gate.OnFrame(1000);
+    assert(!decision.starts_segment);
+    decision = gate.OnFrame(1000);
+    assert(decision.starts_segment);
 
     gate.Reset();
     assert(!gate.IsSpeechActive());
     assert(!gate.IsSuppressed());
     assert(gate.SpeechFrames() == 0);
+    assert(gate.DetectionThresholdRms() == kWakeInferenceMinimumRms);
 
     return 0;
 }

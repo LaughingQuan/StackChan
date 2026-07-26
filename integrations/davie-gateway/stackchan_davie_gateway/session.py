@@ -240,23 +240,36 @@ class StackChanSession:
 
     @property
     def firmware_expectation_state(self) -> str:
-        if not self.identity_verified:
+        return self.evaluate_firmware_expectation(
+            self.settings,
+            self.device_attestation,
+            identity_verified=self.identity_verified,
+        )
+
+    @staticmethod
+    def evaluate_firmware_expectation(
+        settings: Settings,
+        attestation: dict[str, Any],
+        *,
+        identity_verified: bool,
+    ) -> str:
+        if not identity_verified:
             return "identity_unavailable"
-        firmware = self.device_attestation.get("firmware") or {}
+        firmware = attestation.get("firmware") or {}
         if (
             str(firmware.get("project") or "")
-            != self.settings.expected_firmware_project
+            != settings.expected_firmware_project
             or str(firmware.get("version") or "")
-            != self.settings.expected_firmware_version
+            != settings.expected_firmware_version
         ):
             return "mismatch"
-        expected_revision = self.settings.expected_firmware_revision.lower()
+        expected_revision = settings.expected_firmware_revision.lower()
         if expected_revision and (
             str(firmware.get("source_revision") or "").lower()
             != expected_revision
         ):
             return "mismatch"
-        expected_sha = self.settings.expected_firmware_sha256.lower()
+        expected_sha = settings.expected_firmware_sha256.lower()
         if not expected_sha:
             return "version_matched_hash_unconfigured"
         if str(firmware.get("elf_sha256") or "").lower() != expected_sha:
