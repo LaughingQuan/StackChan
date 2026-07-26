@@ -474,6 +474,26 @@ class StackChanSession:
                 firmware_version=firmware.get("version"),
                 firmware_sha256=firmware.get("elf_sha256"),
             )
+            # 固件校验失败此前只写进磁盘上的 diagnostics.json，不进 journal，
+            # 也不影响 /health 的 status——等价于校验已经 fail 但结果被丢弃。
+            # 设备被官方 OTA 换掉时正是走这条路，所以这里必须出声。
+            expectation = self.firmware_expectation_state
+            if expectation != "matched":
+                LOGGER.warning(
+                    "stackchan firmware expectation %s device=%s "
+                    "expected(project=%s version=%s revision=%s sha256=%s) "
+                    "observed(project=%s version=%s revision=%s sha256=%s)",
+                    expectation,
+                    self.device_id,
+                    self.settings.expected_firmware_project,
+                    self.settings.expected_firmware_version,
+                    self.settings.expected_firmware_revision,
+                    self.settings.expected_firmware_sha256,
+                    firmware.get("project"),
+                    firmware.get("version"),
+                    firmware.get("source_revision"),
+                    firmware.get("elf_sha256"),
+                )
         except asyncio.CancelledError:
             raise
         except (ProtocolError, TimeoutError, ValueError) as exc:

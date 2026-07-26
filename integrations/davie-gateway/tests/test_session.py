@@ -1355,3 +1355,44 @@ async def test_reader_checkpoint_mirror_is_async_and_coalesced() -> None:
     assert session.status()["reader_checkpoint"]["mirror_count"] == 1
     assert session.status()["reader_checkpoint"]["failure_count"] == 0
     await session.close()
+
+def test_firmware_mismatch_is_reported_and_never_silently_dropped() -> None:
+    """固件不匹配必须同时体现在会话状态和 /health 上。
+
+    回归背景：2026-07-24 设备被官方 OTA 从本地固件换成 1.4.4，
+    firmware_expectation_state 变成 mismatch，但它只写进磁盘上的 diagnostics.json——
+    不进 journal，也不影响 /health 的 status（恒为 ok）。
+    结果「设备被换掉」与「一切正常」在 HTTP 探测上完全同形，两天无人发现。
+    """
+    session = StackChanSession(
+        transport=FakeTransport(),
+        settings=Settings(
+            expected_firmware_revision="p0revision12",
+            expected_firmware_sha256="c" * 64,
+        ),
+        media=FakeMedia(),
+        davie=FakeDavie(),
+        device_id="device-1",
+        client_id="client-1",
+        codec_factory=FakeCodec,
+    )
+    session.attestation_state = "ready"
+    session.device_attestation = {
+        "schema_version": 1,
+        "status": "ready",
+        "firmware": {
+            "project": "stack-chan",
+            "version": "1.4.3",
+            # 设备实际跑的是另一个构建——正是 OTA 漂移后的形状
+            "source_revision": "otarevision0",
+            "elf_sha256": "d" * 64,
+        },
+    }
+
+    status = session.diagnostic_status()
+    assert status["firmware_expectation_state"] == "mismatch"
+    assert status["intended_firmware_verified"] is False
+
+    # /health 的降级判断读的就是这两个字段；它们同时为真时 status 必须不是 ok
+    assert not status["intended_firmware_verified"]
+    assert status["firmware_expectation_state"] != "matched"

@@ -158,10 +158,28 @@ def create_app(
             device_runtime_status = "audio_flowing"
         else:
             device_runtime_status = "connected_no_audio"
+        # 固件不匹配此前只体现为 intended_firmware_devices 少了一个数，status 恒为 ok。
+        # 结果是「设备被官方 OTA 换掉」与「一切正常」在 HTTP 探测上完全同形——
+        # 2026-07-24 设备漂移到官方 1.4.4 两天无人发现，就是这么来的。
+        # 注意：只降 status，不动 gateway_healthy/service_healthy——网关本身是好的，
+        # 把它标不健康会让看门狗去重启一个没有故障的服务。
+        firmware_states = sorted(
+            {
+                str(status.get("firmware_expectation_state") or "unknown")
+                for status in active_statuses
+                if not status["intended_firmware_verified"]
+            }
+        )
+        degraded_reasons: list[str] = []
+        if active_statuses and intended_firmware_count < len(active_statuses):
+            degraded_reasons.append(
+                "firmware_expectation:" + ",".join(firmware_states or ["unknown"])
+            )
         diagnostic_snapshot = diagnostics.snapshot()
         audio_diagnostic_snapshot = audio_diagnostics.snapshot()
         return {
-            "status": "ok",
+            "status": "degraded" if degraded_reasons else "ok",
+            "degraded_reasons": degraded_reasons,
             "service_healthy": True,
             "gateway_healthy": True,
             "service": "stackchan-davie-gateway",
