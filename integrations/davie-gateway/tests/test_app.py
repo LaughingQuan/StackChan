@@ -497,3 +497,57 @@ def test_reader_can_be_loaded_while_device_is_offline_and_is_persistent() -> Non
         assert cleared.status_code == 200
         assert cleared.json()["removed"] is True
         assert cleared.json()["reader"]["segment_count"] == 0
+
+
+def test_device_identity_is_case_insensitive_across_handshake_and_admin(tmp_path) -> None:
+    """MAC 大小写不是身份的一部分。
+
+    回归背景：固件按小写上报 device-id，而 ~/.hermes/stackchan.json 里人手写的是大写。
+    握手处不归一化时，`preferred in connected_ids` 恒为 False——设备正在通话中，
+    7 个 stackchan_* 工具仍一律抛 device_not_connected，并提示用户去唤醒一台早已连着的设备。
+    """
+    app = create_app(
+        Settings(
+            device_token="device-secret",
+            davie_api_key="davie-secret",
+            admin_token="admin-secret",
+            diagnostic_state_path=str(tmp_path / "diagnostics.json"),
+        ),
+        media_client=NullClient(),
+        davie_client=NullClient(),
+        codec_factory=NullCodec,
+    )
+    with TestClient(app) as client:
+        with client.websocket_connect(
+            "/xiaozhi/v1/",
+            headers={
+                "Authorization": "Bearer device-secret",
+                # 固件真实上报的是小写，这里故意用大写握手，验证网关会归一化
+                "Device-Id": "1C:DB:D4:BA:5B:08",
+                "Client-Id": "AB:CD:EF:01:02:03",
+            },
+        ) as websocket:
+            websocket.send_text(
+                '{"type":"hello","version":1,"transport":"websocket",'
+                '"features":{"mcp":false},"audio_params":{"format":"opus",'
+                '"sample_rate":16000,"channels":1,"frame_duration":60}}'
+            )
+            assert websocket.receive_json()["type"] == "hello"
+
+            listed = client.get(
+                "/v1/devices", headers={"Authorization": "Bearer admin-secret"}
+            ).json()["devices"]
+            # 对外暴露的会话键必须是小写，否则客户端的精确比对仍会落空
+            assert [item["device_id"] for item in listed] == ["1c:db:d4:ba:5b:08"]
+
+            # 管理端点用任意大小写都必须命中同一个活跃会话
+            for candidate in ("1c:db:d4:ba:5b:08", "1C:DB:D4:BA:5B:08", "1c:DB:d4:BA:5b:08"):
+                snapshot = client.get(
+                    f"/v1/devices/{candidate}/diagnostics",
+                    headers={"Authorization": "Bearer admin-secret"},
+                )
+                assert snapshot.status_code == 200, candidate
+                body = snapshot.json()
+                assert body["active_session"] is not None, candidate
+                # 诊断存储也按 device_id 做键——不在存储层归一化，history 一样会查空
+                assert body["known"] is True, candidate

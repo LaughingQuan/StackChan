@@ -90,6 +90,11 @@ def create_app(
     sessions: dict[str, StackChanSession] = {}
     sessions_lock = asyncio.Lock()
 
+    def session_for(device_id: str) -> StackChanSession | None:
+        """按设备标识取会话。键一律小写——MAC 大小写不是身份的一部分，
+        握手处已归一化，这里保证管理端点传大写也能命中同一台设备。"""
+        return sessions.get(device_id.lower())
+
     def require_admin(authorization: str | None) -> None:
         if config.allow_insecure and not config.admin_token:
             return
@@ -239,7 +244,7 @@ def create_app(
         require_admin(authorization)
         if not DEVICE_ID_PATTERN.fullmatch(device_id):
             raise HTTPException(status_code=400, detail="invalid device identity")
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         return diagnostics.device_snapshot(
             device_id,
             active_status=session.diagnostic_status() if session else None,
@@ -264,7 +269,7 @@ def create_app(
         require_admin(authorization)
         if not DEVICE_ID_PATTERN.fullmatch(device_id):
             raise HTTPException(status_code=400, detail="invalid device identity")
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         if session is None or session.hello is None:
             raise HTTPException(
                 status_code=409,
@@ -310,7 +315,7 @@ def create_app(
                 status_code=404,
                 detail="no active diagnostic capture",
             )
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         if session is not None:
             session.record_diagnostic_event(
                 "audio_diagnostic_cancelled",
@@ -333,7 +338,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_admin(authorization)
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         manifest = capability_manifest()
         return {
             **manifest,
@@ -352,9 +357,10 @@ def create_app(
         client_id: str | None = Header(default=None, alias="Client-Id"),
     ) -> dict[str, Any]:
         require_device(authorization)
-        normalized_device_id = device_id or "stackchan-camera"
+        normalized_device_id = (device_id or "stackchan-camera").lower()
         if not DEVICE_ID_PATTERN.fullmatch(normalized_device_id):
             raise HTTPException(status_code=400, detail="invalid device identity")
+        client_id = client_id.lower() if client_id else client_id
         if client_id and not DEVICE_ID_PATTERN.fullmatch(client_id):
             raise HTTPException(status_code=400, detail="invalid client identity")
         if file.content_type not in {"image/jpeg", "image/jpg"}:
@@ -410,7 +416,7 @@ def create_app(
     @app.post("/v1/devices/{device_id}/say")
     async def say(device_id: str, body: SayRequest, authorization: str | None = Header(default=None)):
         require_admin(authorization)
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         if not session:
             raise HTTPException(status_code=404, detail="device is not connected")
         await session.say(body.text)
@@ -422,7 +428,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_admin(authorization)
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         if not session:
             raise HTTPException(status_code=404, detail="device is not connected")
         await session.sleep(reason="admin_sleep")
@@ -440,7 +446,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_admin(authorization)
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         if not session:
             raise HTTPException(status_code=404, detail="device is not connected")
         try:
@@ -458,7 +464,7 @@ def create_app(
         require_admin(authorization)
         if len(body.text) > config.max_reader_chars:
             raise HTTPException(status_code=413, detail="reader content is too large")
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         try:
             if session:
                 reader_status = await session.load_reader(
@@ -482,7 +488,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_admin(authorization)
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         reader = session.reader if session else readers.for_device(device_id)
         return {"device_id": device_id, "connected": session is not None, "reader": reader.status()}
 
@@ -492,7 +498,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_admin(authorization)
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         if not session:
             raise HTTPException(status_code=404, detail="device is not connected")
         try:
@@ -507,7 +513,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_admin(authorization)
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         if not session:
             raise HTTPException(status_code=404, detail="device is not connected")
         return {"status": "ok", "device_id": device_id, "reader": await session.reader_pause()}
@@ -518,7 +524,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_admin(authorization)
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         if not session:
             reader = readers.for_device(device_id)
             reader.stop()
@@ -531,7 +537,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_admin(authorization)
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         if session:
             await session.reader_stop()
             session.reader.clear()
@@ -562,7 +568,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         require_admin(authorization)
-        session = sessions.get(device_id)
+        session = session_for(device_id)
         if not session:
             raise HTTPException(status_code=404, detail="device is not connected")
         try:
@@ -578,8 +584,10 @@ def create_app(
         if not config.allow_insecure and not hmac.compare_digest(authorization, expected_device_auth):
             await websocket.close(code=1008, reason="invalid device token")
             return
-        device_id = websocket.headers.get("device-id", "")
-        client_id = websocket.headers.get("client-id", "")
+        # MAC 大小写不是身份的一部分。固件上报小写、人写的配置常是大写，
+        # 不在这里归一化，同一台设备就会按大小写产生两份会话与两份诊断状态。
+        device_id = websocket.headers.get("device-id", "").lower()
+        client_id = websocket.headers.get("client-id", "").lower()
         if not DEVICE_ID_PATTERN.fullmatch(device_id) or not DEVICE_ID_PATTERN.fullmatch(client_id):
             await websocket.close(code=1008, reason="invalid device identity")
             return

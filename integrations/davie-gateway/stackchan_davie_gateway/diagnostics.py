@@ -268,12 +268,14 @@ class DiagnosticStore:
         *,
         active_status: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        # 设备标识大小写不敏感：会话按小写建键，但管理端点的路径参数可能是任意大小写。
+        device_id = device_id.lower()
         with self._lock:
             known = deepcopy(self._data["devices"].get(device_id))
             recent = [
                 deepcopy(item)
                 for item in self._data["recent_sessions"]
-                if item.get("device_id") == device_id
+                if str(item.get("device_id") or "").lower() == device_id
             ]
         return {
             "device_id": device_id,

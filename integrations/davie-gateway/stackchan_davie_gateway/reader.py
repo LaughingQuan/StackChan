@@ -140,6 +140,8 @@ class ReaderLibrary:
         self._load()
 
     def for_device(self, device_id: str) -> ReaderState:
+        # 同一台设备不应因 device-id 大小写产生两份阅读进度。
+        device_id = device_id.lower()
         reader = self._readers.get(device_id)
         if reader is None:
             reader = ReaderState(device_id=device_id, _on_change=self.save)
