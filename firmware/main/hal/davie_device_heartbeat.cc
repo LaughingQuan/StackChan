@@ -37,6 +37,7 @@ void wait_seconds(int seconds)
 }
 
 bool post_heartbeat(
+    std::unique_ptr<Http>& http,
     const std::string& url,
     const std::string& token)
 {
@@ -47,7 +48,9 @@ bool post_heartbeat(
         return false;
     }
 
-    auto http = network->CreateHttp(0);
+    if (!http) {
+        http = network->CreateHttp(0);
+    }
     if (!http) {
         ESP_LOGW(kTag, "HTTP client is not available");
         return false;
@@ -69,7 +72,8 @@ bool post_heartbeat(
 
     const int status = http->GetStatusCode();
     http->ReadAll();
-    http->Close();
+    // Keep the client alive while the transport finishes its asynchronous
+    // disconnect callback. Closing it here can deadlock the HTTP mutex.
     if (status != 200) {
         ESP_LOGW(kTag, "Heartbeat rejected: status=%d", status);
         return false;
@@ -80,6 +84,7 @@ bool post_heartbeat(
 void heartbeat_loop(void*)
 {
     int retry_seconds = kConfigurationRetrySeconds;
+    std::unique_ptr<Http> http;
     while (true) {
         Settings settings("websocket", false);
         const std::string url = settings.GetString("heartbeat_url");
@@ -99,7 +104,7 @@ void heartbeat_loop(void*)
             continue;
         }
 
-        if (post_heartbeat(url, token)) {
+        if (post_heartbeat(http, url, token)) {
             retry_seconds = kConfigurationRetrySeconds;
             ESP_LOGI(
                 kTag,
