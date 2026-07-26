@@ -134,7 +134,9 @@ void StartHeartbeat()
     if (created != pdPASS) {
         heartbeat_task = nullptr;
         ESP_LOGE(kTag, "Failed to create heartbeat task");
+        return;
     }
+    ESP_LOGI(kTag, "Idle heartbeat task started");
 }
 
 }  // namespace davie::device

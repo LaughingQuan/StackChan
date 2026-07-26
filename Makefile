@@ -55,5 +55,6 @@ test-firmware:
 	else \
 		"$(CMAKE)" -S firmware/tests -B build/firmware-tests >/dev/null && \
 		"$(CMAKE)" --build build/firmware-tests >/dev/null && \
-		"$(CTEST)" --test-dir build/firmware-tests --output-on-failure; \
+		"$(CTEST)" --test-dir build/firmware-tests --output-on-failure && \
+		python3 firmware/tests/firmware_lifecycle_contract_test.py; \
 	fi

@@ -200,8 +200,10 @@ void Hal::startXiaozhi()
     // Start stackchan update task
     xTaskCreatePinnedToCore(_stackchan_update_task, "stackchan", 4096, NULL, 3, NULL, 1);
 
-    hal_bridge::start_xiaozhi_app();
+    // The official application loop never returns, so background device
+    // services must be started before control is handed to it.
     davie::device::StartHeartbeat();
+    hal_bridge::start_xiaozhi_app();
 }
 
 XiaozhiConfig_t Hal::getXiaozhiConfig()
