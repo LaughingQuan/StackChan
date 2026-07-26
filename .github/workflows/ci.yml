@@ -1,0 +1,60 @@
+name: CI
+
+# 这个仓库此前没有任何 CI。stackchan-davie-gateway 以常驻服务跑在 Rock5B 上，
+# 被测代码 5648 行（session.py 单文件 2131 行），81 个网关测试是绿的——
+# 但没有任何自动化会在提交或部署时跑它们，包括 5 个固件唤醒/音频桥 C++ 测试
+# 和服务端 Go 测试。本地栈的正确性完全依赖人记得手动跑。
+#
+# 那正是 Stack-chan 自动 OTA 到官方 1.4.4 后离开本地栈两天、
+# 服务端一直「健康」却无人告警的同一个形状：没有通道，就没有发现。
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gateway:
+    name: Gateway (Python)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: integrations/davie-gateway
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --locked --group dev
+      - run: uv run pytest -q
+
+  server:
+    name: Server (Go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
+      - run: go test ./...
+        working-directory: server
+
+  firmware:
+    name: Firmware unit tests (C++)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # 这五个用例（唤醒推理门、唤醒分段协调、post-wake 音频桥、TF 文本、运动数学）
+      # 是纯主机侧单元测试，不需要 ESP-IDF 工具链。
+      - run: cmake -S firmware/tests -B build
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
