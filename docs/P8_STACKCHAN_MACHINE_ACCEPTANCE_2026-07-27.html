@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>P8 Stack-chan 机器验收</title>
+  <style>
+    :root {
+      --ink: #17332d;
+      --muted: #60726d;
+      --paper: #f5efe3;
+      --card: #fffaf1;
+      --line: #d7cbb8;
+      --green: #1f765f;
+      --amber: #ad641f;
+      --red: #a73f32;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        linear-gradient(rgba(23, 51, 45, .035) 1px, transparent 1px),
+        var(--paper);
+      background-size: 100% 32px;
+      font: 16px/1.65 "Avenir Next", "Noto Sans SC", sans-serif;
+    }
+    main { width: min(1080px, calc(100% - 32px)); margin: 0 auto; padding: 48px 0 80px; }
+    header { border-bottom: 2px solid var(--ink); padding-bottom: 28px; }
+    .eyebrow { color: var(--amber); font-weight: 750; letter-spacing: .14em; text-transform: uppercase; }
+    h1, h2 { font-family: "Iowan Old Style", "Noto Serif SC", serif; }
+    h1 { margin: 8px 0; font-size: clamp(36px, 7vw, 72px); line-height: 1; }
+    h2 { margin: 42px 0 14px; font-size: 30px; }
+    p { max-width: 78ch; }
+    code { overflow-wrap: anywhere; }
+    .summary, .grid { display: grid; gap: 14px; }
+    .summary { grid-template-columns: repeat(3, 1fr); margin-top: 24px; }
+    .grid { grid-template-columns: repeat(2, 1fr); }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: color-mix(in srgb, var(--card) 92%, transparent);
+      padding: 20px;
+    }
+    .metric { font-size: 31px; font-weight: 800; line-height: 1.1; }
+    .label { color: var(--muted); margin-top: 6px; }
+    .pass { color: var(--green); }
+    .pending { color: var(--amber); }
+    table { width: 100%; border-collapse: collapse; background: var(--card); }
+    th, td { padding: 12px 14px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { background: #e7ddcc; }
+    ol, ul { padding-left: 24px; }
+    .gate {
+      margin-top: 26px;
+      padding: 20px;
+      border: 2px solid var(--red);
+      border-radius: 16px;
+      background: #fff2eb;
+    }
+    @media (max-width: 760px) {
+      main { width: min(100% - 22px, 1080px); padding-top: 28px; }
+      .summary, .grid { grid-template-columns: 1fr; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">P8 · machine acceptance · 2026-07-27</div>
+      <h1>Stack-chan 设备连续性</h1>
+      <p>
+        本页只记录已经发生的证据。机器测试通过不等于真人语音体验通过；
+        在七个真人场景完成前，P8 保持未完成，P9 不启动。
+      </p>
+      <div class="summary">
+        <div class="card">
+          <div class="metric pass">0.7.0</div>
+          <div class="label">隔离 Stack-chan Gateway</div>
+        </div>
+        <div class="card">
+          <div class="metric pass">5 / 5</div>
+          <div class="label">设备重启后 heartbeat 恢复</div>
+        </div>
+        <div class="card">
+          <div class="metric pending">0 / 7</div>
+          <div class="label">真人场景，等待 Jason 验收</div>
+        </div>
+      </div>
+    </header>
+
+    <section>
+      <h2>已通过的机器门禁</h2>
+      <table>
+        <thead>
+          <tr><th>项目</th><th>真实证据</th><th>结论</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>固件来源</td>
+            <td>官方 1.4.3 源码固定到上游 commit <code>e77dedb13091</code>；定制 patch 可从干净 clone 重放。</td>
+            <td class="pass">通过</td>
+          </tr>
+          <tr>
+            <td>备份与刷写</td>
+            <td>16 MiB 全闪存备份存入 NAS 内部盘并通过 SHA256；只刷 App 分区；<code>verify_flash</code> digest matched。</td>
+            <td class="pass">通过</td>
+          </tr>
+          <tr>
+            <td>固件身份</td>
+            <td><code>stack-chan 1.4.3</code>；source <code>4bfb8c446c01</code>；ELF <code>f5dc996f...32d76</code>；Gateway 判定 matched。</td>
+            <td class="pass">通过</td>
+          </tr>
+          <tr>
+            <td>设备启动</td>
+            <td>屏幕、头像、音频 codec、相机、触控、舵机、官方应用循环均初始化；串口无 panic/WDT。</td>
+            <td class="pass">通过</td>
+          </tr>
+          <tr>
+            <td>TF 卡</td>
+            <td>14,895 MiB 可用；mounted、writable、self_test_passed 均为 true；诊断计数跨 5 次重启保留。</td>
+            <td class="pass">通过</td>
+          </tr>
+          <tr>
+            <td>Wi-Fi</td>
+            <td>保留原 NVS，自动连接 <code>JasonLee_2.4G</code>，IP <code>192.168.50.210</code>。</td>
+            <td class="pass">通过</td>
+          </tr>
+          <tr>
+            <td>Idle heartbeat</td>
+            <td>修复了 heartbeat 写在官方永不返回事件循环之后的生命周期 bug；设备每 30 秒主动上报。</td>
+            <td class="pass">通过</td>
+          </tr>
+          <tr>
+            <td>重启恢复</td>
+            <td>5 次设备重启均在 14.8–15.0 秒形成新 heartbeat；Gateway 重启后先恢复持久状态，再收到新 heartbeat。</td>
+            <td class="pass">通过</td>
+          </tr>
+          <tr>
+            <td>服务合同</td>
+            <td>87 个 Gateway 测试、Go 全包、5 个固件 C++ 测试和生命周期顺序回归均通过。</td>
+            <td class="pass">通过</td>
+          </tr>
+          <tr>
+            <td>在线合成链路</td>
+            <td>生命周期 smoke、MCP/vision/reader smoke、STT→local Davie→TTS smoke 全部通过。</td>
+            <td class="pass">通过</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>仍需真人完成的七场景</h2>
+      <div class="grid">
+        <article class="card">
+          <h3>1. 安静房间唤醒</h3>
+          <p>分别使用 “Davie” 与 “Hello Davie”，累计 10 次。记录成功、漏唤醒、响应时间和 wake evidence。</p>
+        </article>
+        <article class="card">
+          <h3>2. 背景噪音</h3>
+          <p>有电视或生活噪音时测试真唤醒，并观察 5 分钟内是否发生误唤醒。</p>
+        </article>
+        <article class="card">
+          <h3>3. 连续五轮</h3>
+          <p>同一会话完成 5 轮短问答，验证不会每轮重新唤醒、不会丢上下文。</p>
+        </article>
+        <article class="card">
+          <h3>4. 打断并补充</h3>
+          <p>在 Davie 播报中插话；必须真人确认设备及时停播，补充内容进入同一上下文。</p>
+        </article>
+        <article class="card">
+          <h3>5. 后台深度任务</h3>
+          <p>发起一个需要后台处理的问题；先收到短确认，完成后结果回到原会话播报。</p>
+        </article>
+        <article class="card">
+          <h3>6. 伴读恢复</h3>
+          <p>读书、暂停、继续，再由 Web/手机恢复同一位置；检查句子、声音和速度。</p>
+        </article>
+        <article class="card">
+          <h3>7. 断网/重启恢复</h3>
+          <p>设备重启或短暂断网后，无重新配网即可恢复；再做一次真实唤醒和问答。</p>
+        </article>
+      </div>
+      <div class="gate">
+        <strong>硬门禁：</strong>
+        ping、HTTP 200、设备屏幕亮、合成客户端、Track/音频包或服务器日志，
+        都不能代替真人听到、说话、打断和继续阅读的证据。
+      </div>
+    </section>
+  </main>
+</body>
+</html>
